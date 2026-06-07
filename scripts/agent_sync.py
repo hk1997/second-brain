@@ -337,7 +337,16 @@ def main() -> None:
     vault_path = config["vault"]["path"]
     agent_dir_rel = config["vault"]["agent_dir"]
     
-    scan_vault(vault_path, agent_dir_rel, config)
+    if "--loop" in sys.argv:
+        print("Starting Obsidian Agent Bridge loop mode (press Ctrl+C to exit)...")
+        try:
+            while True:
+                scan_vault(vault_path, agent_dir_rel, config)
+                time.sleep(5)
+        except KeyboardInterrupt:
+            print("\nExiting watcher loop gracefully.")
+    else:
+        scan_vault(vault_path, agent_dir_rel, config)
 
 if __name__ == "__main__":
     main()
