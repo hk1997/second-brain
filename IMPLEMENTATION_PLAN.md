@@ -5,9 +5,9 @@ This document serves as the single source of truth for tracking the implementati
 ---
 
 ## Progress Overview
-* **Overall Progress:** 19%
-* **Current Phase:** Phase 2: macOS Sandbox & Execution Provider
-* **Current Task:** Setup dynamic sandbox profiles (Task 2.1)
+* **Overall Progress:** 38%
+* **Current Phase:** Phase 3: Router/Planner Subagent
+* **Current Task:** Implement Router subagent prompts (Task 3.1)
 
 ---
 
@@ -27,11 +27,11 @@ This document serves as the single source of truth for tracking the implementati
 ## Phase 2: macOS Sandbox & Execution Provider
 *Goal: Setup macOS App Sandbox (sandbox-exec) containment and build the CLI agent wrapper.*
 
-- [ ] **Task 2.1: sandbox-exec Profile Generator**
+- [x] **Task 2.1: sandbox-exec Profile Generator**
   * Write logic in `scripts/agent_sync.py` to generate the `.sb` Scheme sandbox profile dynamically, locking read/write operations strictly to the Obsidian vault directory.
-- [ ] **Task 2.2: Provider Abstraction Layer**
+- [x] **Task 2.2: Provider Abstraction Layer**
   * Implement the Base Class `AgentProvider` and the concrete `AgyProvider` to spawn and manage `agy` CLI processes.
-- [ ] **Task 2.3: Centralized Log Replicator**
+- [x] **Task 2.3: Centralized Log Replicator**
   * Redirect agent stdout/stderr and tool calls to append entries to `_System/Agent/logs.md` in a clean markdown format.
 
 ---

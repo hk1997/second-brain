@@ -6,6 +6,8 @@ import json
 import time
 from typing import Dict, Any, List
 
+from scripts.providers.agy import AgyProvider
+
 # Resolve paths relative to script location
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, "..", "config", "config.json")
@@ -48,7 +50,38 @@ def set_last_scan_time(agent_dir: str, scan_time: float) -> None:
     except Exception as e:
         print(f"Warning: Failed to save scan state: {e}", file=sys.stderr)
 
-def process_file(filepath: str) -> None:
+def replicate_log(vault_path: str, agent_dir_rel: str, prompt: str, model: str, success: bool, output: str, error: str = None) -> None:
+    """Appends execution log entry to _System/Agent/logs.md."""
+    agent_dir = os.path.join(vault_path, agent_dir_rel)
+    os.makedirs(agent_dir, exist_ok=True)
+    logs_file = os.path.join(agent_dir, "logs.md")
+    
+    timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+    status_str = "Completed" if success else "Failed"
+    
+    log_entry = (
+        f"## [{timestamp}] Task Execution\n"
+        f"* **Prompt:** {prompt}\n"
+        f"* **Model:** {model}\n"
+        f"* **Status:** {status_str}\n"
+    )
+    if error:
+        log_entry += f"* **Error:** {error}\n"
+        
+    log_entry += f"\n### Output\n```\n{output.strip()}\n```\n\n---\n\n"
+    
+    try:
+        # Check if logs.md exists, if not, write a header
+        if not os.path.exists(logs_file):
+            with open(logs_file, "w", encoding="utf-8") as f:
+                f.write("# OAB Execution Audit Logs\n\n")
+                
+        with open(logs_file, "a", encoding="utf-8") as f:
+            f.write(log_entry)
+    except Exception as e:
+        print(f"Warning: Failed to write to log file: {e}", file=sys.stderr)
+
+def process_file(filepath: str, config: Dict[str, Any]) -> None:
     """Parses, mutates and executes tasks in a specific markdown note."""
     try:
         with open(filepath, "r", encoding="utf-8") as f:
@@ -87,11 +120,33 @@ def process_file(filepath: str) -> None:
             print(f"Failed to write running status to file: {e}", file=sys.stderr)
             return
 
-        # 2. Placeholder execution (Real agent orchestration will happen in Phase 2)
+        # 2. Execute under sandbox
         print(f"Executing: '{prompt}'...")
-        # For now, we simulate execution success
-        execution_success = True
         
+        # Determine model complexity routing
+        # (Router subagent will be implemented in Phase 3; for now we use default model from config)
+        model = config["execution"]["default_model"]
+        sandbox_enabled = config["security"]["sandbox_exec_enabled"]
+        
+        provider = AgyProvider(sandbox_enabled=sandbox_enabled)
+        
+        execution_success = False
+        output_text = ""
+        error_details = None
+        
+        try:
+            output_text = provider.execute(prompt, config["vault"]["path"], model)
+            execution_success = True
+            print(f"Task completed successfully: '{prompt}'")
+        except Exception as e:
+            execution_success = False
+            error_details = str(e)
+            output_text = error_details
+            print(f"Task failed: '{prompt}' - Error: {e}", file=sys.stderr)
+        
+        # Replicate log back to logs.md
+        replicate_log(config["vault"]["path"], config["vault"]["agent_dir"], prompt, model, execution_success, output_text, error_details)
+
         # 3. Mutate state to Completed or Failed
         final_tag = "/second-brain-task-completed" if execution_success else "/second-brain-task-failed"
         completed_block = running_block.replace("/second-brain-task-running", final_tag, 1)
@@ -100,12 +155,11 @@ def process_file(filepath: str) -> None:
         try:
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(current_content)
-            print(f"Task completed successfully: '{prompt}'")
         except Exception as e:
             print(f"Failed to write final status to file: {e}", file=sys.stderr)
             return
 
-def scan_vault(vault_path: str, agent_dir_rel: str) -> None:
+def scan_vault(vault_path: str, agent_dir_rel: str, config: Dict[str, Any]) -> None:
     """Scans Obsidian vault for modified markdown files containing tasks."""
     if not os.path.exists(vault_path):
         print(f"Error: Vault path does not exist: {vault_path}", file=sys.stderr)
@@ -129,7 +183,7 @@ def scan_vault(vault_path: str, agent_dir_rel: str) -> None:
                     mtime = os.path.getmtime(filepath)
                     # Scan files modified since last scan
                     if mtime > last_scan_time:
-                        process_file(filepath)
+                        process_file(filepath, config)
                 except Exception as e:
                     print(f"Error inspecting file modification time for {file}: {e}", file=sys.stderr)
 
@@ -140,7 +194,7 @@ def main() -> None:
     vault_path = config["vault"]["path"]
     agent_dir_rel = config["vault"]["agent_dir"]
     
-    scan_vault(vault_path, agent_dir_rel)
+    scan_vault(vault_path, agent_dir_rel, config)
 
 if __name__ == "__main__":
     main()

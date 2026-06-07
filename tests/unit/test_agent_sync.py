@@ -5,7 +5,7 @@ import unittest
 import tempfile
 import json
 import shutil
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 # Import the code to test
 from scripts import agent_sync
@@ -18,6 +18,20 @@ class TestAgentSync(unittest.TestCase):
         self.vault_path = self.test_dir.name
         self.agent_dir = os.path.join(self.vault_path, "_System", "Agent")
         os.makedirs(self.agent_dir, exist_ok=True)
+
+        # Mock configuration
+        self.config = {
+            "vault": {
+                "path": self.vault_path,
+                "agent_dir": "_System/Agent"
+            },
+            "security": {
+                "sandbox_exec_enabled": False
+            },
+            "execution": {
+                "default_model": "gemini-1.5-flash"
+            }
+        }
 
     def tearDown(self):
         # Cleanup temporary files
@@ -42,13 +56,17 @@ class TestAgentSync(unittest.TestCase):
             f.write(note_content)
 
         # Process note
-        agent_sync.process_file(note_path)
+        agent_sync.process_file(note_path, self.config)
 
         # Assert no modifications
         with open(note_path, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), note_content)
 
-    def test_process_file_with_task_mutation(self):
+    @patch("scripts.providers.agy.AgyProvider.execute")
+    def test_process_file_with_task_mutation(self, mock_execute):
+        # Mock successful provider run
+        mock_execute.return_value = "Mocked execution output"
+
         # Create note with a single-line task
         note_path = os.path.join(self.vault_path, "note.md")
         note_content = (
@@ -62,7 +80,7 @@ class TestAgentSync(unittest.TestCase):
             f.write(note_content)
 
         # Process note
-        agent_sync.process_file(note_path)
+        agent_sync.process_file(note_path, self.config)
 
         # Read back content
         with open(note_path, "r", encoding="utf-8") as f:
@@ -74,7 +92,19 @@ class TestAgentSync(unittest.TestCase):
         self.assertIn("/second-brain-task-completed", final_content)
         self.assertIn("Create a Google Calendar entry for dentist tomorrow at 10 AM", final_content)
 
-    def test_process_file_multiline_task(self):
+        # Assert logs.md was created and populated
+        logs_path = os.path.join(self.agent_dir, "logs.md")
+        self.assertTrue(os.path.exists(logs_path))
+        with open(logs_path, "r", encoding="utf-8") as f:
+            logs_content = f.read()
+        self.assertIn("Create a Google Calendar entry for dentist tomorrow at 10 AM", logs_content)
+        self.assertIn("Mocked execution output", logs_content)
+
+    @patch("scripts.providers.agy.AgyProvider.execute")
+    def test_process_file_multiline_task(self, mock_execute):
+        # Mock successful provider run
+        mock_execute.return_value = "Mocked execution output"
+
         # Create note with a multi-line task
         note_path = os.path.join(self.vault_path, "note.md")
         note_content = (
@@ -87,7 +117,7 @@ class TestAgentSync(unittest.TestCase):
             f.write(note_content)
 
         # Process note
-        agent_sync.process_file(note_path)
+        agent_sync.process_file(note_path, self.config)
 
         # Read back content
         with open(note_path, "r", encoding="utf-8") as f:
@@ -106,7 +136,6 @@ class TestAgentSync(unittest.TestCase):
             f.write("/second-brain-task\nTest\n<end-task>")
 
         # Force state to be older than file modification time
-        # Let's set last scan to 10 seconds ago, and touch file to now
         last_scan = time.time() - 10.0
         agent_sync.set_last_scan_time(self.agent_dir, last_scan)
         
@@ -114,10 +143,10 @@ class TestAgentSync(unittest.TestCase):
         os.utime(note_path, (time.time(), time.time()))
 
         # Run scan
-        agent_sync.scan_vault(self.vault_path, "_System/Agent")
+        agent_sync.scan_vault(self.vault_path, "_System/Agent", self.config)
 
         # Assert process_file was called for the modified note
-        mock_process_file.assert_called_once_with(note_path)
+        mock_process_file.assert_called_once_with(note_path, self.config)
 
 if __name__ == "__main__":
     unittest.main()
