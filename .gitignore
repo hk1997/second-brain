@@ -10,3 +10,9 @@ Icon
 
 # Thumbnails
 ._*
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
