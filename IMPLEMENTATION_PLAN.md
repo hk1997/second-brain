@@ -5,9 +5,9 @@ This document serves as the single source of truth for tracking the implementati
 ---
 
 ## Progress Overview
-* **Overall Progress:** 38%
-* **Current Phase:** Phase 3: Router/Planner Subagent
-* **Current Task:** Implement Router subagent prompts (Task 3.1)
+* **Overall Progress:** 50%
+* **Current Phase:** Phase 4: MCP Servers & Native AppleScript Integration
+* **Current Task:** Setup Google OAuth Credentials (Task 4.1)
 
 ---
 
@@ -39,9 +39,9 @@ This document serves as the single source of truth for tracking the implementati
 ## Phase 3: Router/Planner Subagent
 *Goal: Integrate a lightweight subagent to automate model selection and tool routing.*
 
-- [ ] **Task 3.1: Router Prompt Engineering**
+- [x] **Task 3.1: Router Prompt Engineering**
   * Draft the system instructions prompting the router subagent (`gemini-1.5-flash`) to output structured JSON metadata.
-- [ ] **Task 3.2: Router Execution & Parameter Parsing**
+- [x] **Task 3.2: Router Execution & Parameter Parsing**
   * Integrate the subagent step at the start of the watcher pipeline. Parse the recommended model and tool list to dynamically configure the main run.
 
 ---

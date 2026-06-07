@@ -62,9 +62,11 @@ class TestAgentSync(unittest.TestCase):
         with open(note_path, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), note_content)
 
+    @patch("scripts.agent_sync.route_task")
     @patch("scripts.providers.agy.AgyProvider.execute")
-    def test_process_file_with_task_mutation(self, mock_execute):
-        # Mock successful provider run
+    def test_process_file_with_task_mutation(self, mock_execute, mock_route):
+        # Mock successful provider and route runs
+        mock_route.return_value = {"complexity": "simple", "model_recommendation": "gemini-1.5-flash", "required_mcp_servers": []}
         mock_execute.return_value = "Mocked execution output"
 
         # Create note with a single-line task
@@ -100,9 +102,11 @@ class TestAgentSync(unittest.TestCase):
         self.assertIn("Create a Google Calendar entry for dentist tomorrow at 10 AM", logs_content)
         self.assertIn("Mocked execution output", logs_content)
 
+    @patch("scripts.agent_sync.route_task")
     @patch("scripts.providers.agy.AgyProvider.execute")
-    def test_process_file_multiline_task(self, mock_execute):
-        # Mock successful provider run
+    def test_process_file_multiline_task(self, mock_execute, mock_route):
+        # Mock successful provider and route runs
+        mock_route.return_value = {"complexity": "simple", "model_recommendation": "gemini-1.5-flash", "required_mcp_servers": []}
         mock_execute.return_value = "Mocked execution output"
 
         # Create note with a multi-line task

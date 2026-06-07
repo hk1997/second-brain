@@ -7,6 +7,7 @@ import time
 from typing import Dict, Any, List
 
 from scripts.providers.agy import AgyProvider
+from scripts.router import route_task
 
 # Resolve paths relative to script location
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -123,11 +124,13 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         # 2. Execute under sandbox
         print(f"Executing: '{prompt}'...")
         
-        # Determine model complexity routing
-        # (Router subagent will be implemented in Phase 3; for now we use default model from config)
-        model = config["execution"]["default_model"]
-        sandbox_enabled = config["security"]["sandbox_exec_enabled"]
+        # Determine model complexity routing via the Router Subagent
+        print("Routing task via Router Subagent...")
+        metadata = route_task(prompt, config["vault"]["path"], config)
+        model = metadata["model_recommendation"]
+        print(f"Task routed to {model} (Complexity: {metadata['complexity']}, MCP tools: {metadata['required_mcp_servers']})")
         
+        sandbox_enabled = config["security"]["sandbox_exec_enabled"]
         provider = AgyProvider(sandbox_enabled=sandbox_enabled)
         
         execution_success = False
