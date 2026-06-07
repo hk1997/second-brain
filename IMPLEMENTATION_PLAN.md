@@ -5,9 +5,9 @@ This document serves as the single source of truth for tracking the implementati
 ---
 
 ## Progress Overview
-* **Overall Progress:** 62%
-* **Current Phase:** Phase 5: Markdown Approval Gate
-* **Current Task:** Setup tool interception for dangerous actions (Task 5.1)
+* **Overall Progress:** 75%
+* **Current Phase:** Phase 6: Lifecycle CLI & End-to-End Testing
+* **Current Task:** Implement the command line daemon manager (Task 6.1)
 
 ---
 
@@ -61,10 +61,10 @@ This document serves as the single source of truth for tracking the implementati
 ## Phase 5: Markdown Approval Gate
 *Goal: Build a remote approval mechanism for dangerous shell/git actions.*
 
-- [ ] **Task 5.1: Tool Interception & Note Insertion**
+- [x] **Task 5.1: Tool Interception & Note Insertion**
   * Classify tools in the runner and intercept requests to execute "Dangerous" tools.
   * Pause execution and insert the markdown checklist (`- [ ] Approve Execution`) into the task note.
-- [ ] **Task 5.2: Watcher Checkbox Polling & Resume**
+- [x] **Task 5.2: Watcher Checkbox Polling & Resume**
   * Update the file watcher loop to scan the note for approval states. When the checkbox changes, capture the response and resume the agent.
 
 ---

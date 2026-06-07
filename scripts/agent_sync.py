@@ -106,6 +106,56 @@ def replicate_log(vault_path: str, agent_dir_rel: str, prompt: str, model: str, 
     except Exception as e:
         print(f"Warning: Failed to write to log file: {e}", file=sys.stderr)
 
+def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config: Dict[str, Any]) -> bool:
+    """Runs the subagent router, sandboxed provider and logs the results."""
+    # 2. Execute under sandbox
+    print(f"Executing: '{prompt}'...")
+    
+    # Determine model complexity routing via the Router Subagent
+    print("Routing task via Router Subagent...")
+    metadata = route_task(prompt, config["vault"]["path"], config)
+    model = metadata["model_recommendation"]
+    print(f"Task routed to {model} (Complexity: {metadata['complexity']}, MCP tools: {metadata['required_mcp_servers']})")
+    
+    sandbox_enabled = config["security"]["sandbox_exec_enabled"]
+    provider = AgyProvider(sandbox_enabled=sandbox_enabled)
+    
+    execution_success = False
+    output_text = ""
+    error_details = None
+    
+    try:
+        output_text = provider.execute(prompt, config["vault"]["path"], model)
+        execution_success = True
+        print(f"Task completed successfully: '{prompt}'")
+        send_notification_alert(config, f"OAB Task Completed: '{prompt}'")
+    except Exception as e:
+        execution_success = False
+        error_details = str(e)
+        output_text = error_details
+        print(f"Task failed: '{prompt}' - Error: {e}", file=sys.stderr)
+        send_notification_alert(config, f"OAB Task Failed: '{prompt}' - Error: {e}")
+    
+    # Replicate log back to logs.md
+    replicate_log(config["vault"]["path"], config["vault"]["agent_dir"], prompt, model, execution_success, output_text, error_details)
+
+    # 3. Mutate state to Completed or Failed
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            current_content = f.read()
+            
+        final_tag = "/second-brain-task-completed" if execution_success else "/second-brain-task-failed"
+        completed_block = running_block.replace("/second-brain-task-running", final_tag, 1)
+        current_content = current_content.replace(running_block, completed_block, 1)
+        
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(current_content)
+    except Exception as e:
+        print(f"Failed to write final status to file: {e}", file=sys.stderr)
+        return False
+        
+    return execution_success
+
 def process_file(filepath: str, config: Dict[str, Any]) -> None:
     """Parses, mutates and executes tasks in a specific markdown note."""
     try:
@@ -115,80 +165,142 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         print(f"Error reading {filepath}: {e}", file=sys.stderr)
         return
 
-    # Match /second-brain-task followed by prompt and <end-task> (multi-line)
-    # Using negative lookahead to prevent matching -running, -completed, or -failed tags
-    task_pattern = re.compile(r"/second-brain-task(?![a-zA-Z0-9_-])\s*\n?(.*?)\n?<end-task>", re.DOTALL)
+    # Check for pending approvals first!
+    pending_pattern = re.compile(r"/second-brain-task-pending-approval\s*\n?(.*?)\n?<end-task>", re.DOTALL)
+    pending_matches = list(pending_pattern.finditer(content))
     
-    matches = list(task_pattern.finditer(content))
+    current_content = content
+    
+    if pending_matches:
+        for match in pending_matches:
+            original_block = match.group(0)
+            prompt = match.group(1).strip()
+            
+            # Check note for checkboxes
+            is_approved = "- [x] Approve Task" in content
+            is_rejected = "- [x] Reject Task" in content
+            
+            if is_approved:
+                print(f"Task approved by user: '{prompt}'")
+                # Clean up approval block and update state to Running
+                clean_block = original_block.replace("/second-brain-task-pending-approval", "/second-brain-task-running")
+                current_content = current_content.replace(original_block, clean_block)
+                # Strip out approval checklist block
+                current_content = re.sub(
+                    r"### \[Approval Required\].*?- \[[x ]\] Approve Task\s*\n?- \[[x ]\] Reject Task\s*\n?", 
+                    "", 
+                    current_content, 
+                    flags=re.DOTALL
+                )
+                
+                try:
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        f.write(current_content)
+                    send_notification_alert(config, f"OAB Task Approved: '{prompt}'")
+                except Exception as e:
+                    print(f"Failed to write approved status: {e}", file=sys.stderr)
+                    return
+                
+                # Execute pipeline
+                execute_task_pipeline(filepath, clean_block, prompt, config)
+                return
+                
+            elif is_rejected:
+                print(f"Task rejected by user: '{prompt}'")
+                # Update state to Failed
+                failed_block = original_block.replace("/second-brain-task-pending-approval", "/second-brain-task-failed")
+                current_content = current_content.replace(original_block, failed_block)
+                # Strip out approval checklist block
+                current_content = re.sub(
+                    r"### \[Approval Required\].*?- \[[x ]\] Approve Task\s*\n?- \[[x ]\] Reject Task\s*\n?", 
+                    "", 
+                    current_content, 
+                    flags=re.DOTALL
+                )
+                # Append rejection log
+                current_content += "\n\n# Error\nTask execution rejected by user."
+                
+                try:
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        f.write(current_content)
+                    send_notification_alert(config, f"OAB Task Rejected: '{prompt}'")
+                except Exception as e:
+                    print(f"Failed to write rejected status: {e}", file=sys.stderr)
+                return
+            else:
+                # Still waiting for approval
+                print(f"Task is pending user approval: '{prompt}'")
+                return
+
+    # Check for new tasks
+    task_pattern = re.compile(r"/second-brain-task(?![a-zA-Z0-9_-])\s*\n?(.*?)\n?<end-task>", re.DOTALL)
+    matches = list(task_pattern.finditer(current_content))
     if not matches:
         return
 
     print(f"Scanning: {os.path.basename(filepath)} - Found {len(matches)} task(s)")
     
-    # We load current content as we will mutate it incrementally
-    current_content = content
-
     for match in matches:
         original_block = match.group(0)
         prompt = match.group(1).strip()
         
         print(f"Task detected: '{prompt}'")
         
-        # 1. Mutate state to Running
-        running_block = original_block.replace("/second-brain-task", "/second-brain-task-running", 1)
-        current_content = current_content.replace(original_block, running_block, 1)
+        # Check if task requires manual approval
+        frontmatter = {}
+        if current_content.startswith("---"):
+            parts = current_content.split("---", 2)
+            if len(parts) >= 3:
+                yaml_part = parts[1]
+                for line in yaml_part.splitlines():
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        frontmatter[k.strip().lower()] = v.strip().strip('"').strip("'")
+                        
+        has_write_files = "write_files" in frontmatter
+        dangerous_keywords = ["rm ", "delete", "git push", "git commit", "deploy", "run command"]
+        has_dangerous_keywords = any(kw in prompt.lower() for kw in dangerous_keywords)
         
-        try:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(current_content)
-            # Notify user
-            send_notification_alert(config, f"OAB Task Running: '{prompt}'")
-        except Exception as e:
-            print(f"Failed to write running status to file: {e}", file=sys.stderr)
+        if has_write_files or has_dangerous_keywords:
+            print(f"Task '{prompt}' requires manual approval. Inserting approval checklist...")
+            pending_block = original_block.replace("/second-brain-task", "/second-brain-task-pending-approval")
+            current_content = current_content.replace(original_block, pending_block)
+            
+            # Construct interactive checklist block
+            approval_ui = (
+                "\n\n### [Approval Required] Run Task\n"
+                "This task contains write files or execution actions. Please approve to run:\n"
+                "- [ ] Approve Task\n"
+                "- [ ] Reject Task\n"
+            )
+            block_index = current_content.find(pending_block)
+            if block_index != -1:
+                insert_pos = block_index + len(pending_block)
+                current_content = current_content[:insert_pos] + approval_ui + current_content[insert_pos:]
+            else:
+                current_content += approval_ui
+                
+            try:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(current_content)
+                send_notification_alert(config, f"OAB Task Approval Required: '{prompt}'")
+            except Exception as e:
+                print(f"Failed to write pending approval state: {e}", file=sys.stderr)
             return
-
-        # 2. Execute under sandbox
-        print(f"Executing: '{prompt}'...")
-        
-        # Determine model complexity routing via the Router Subagent
-        print("Routing task via Router Subagent...")
-        metadata = route_task(prompt, config["vault"]["path"], config)
-        model = metadata["model_recommendation"]
-        print(f"Task routed to {model} (Complexity: {metadata['complexity']}, MCP tools: {metadata['required_mcp_servers']})")
-        
-        sandbox_enabled = config["security"]["sandbox_exec_enabled"]
-        provider = AgyProvider(sandbox_enabled=sandbox_enabled)
-        
-        execution_success = False
-        output_text = ""
-        error_details = None
-        
-        try:
-            output_text = provider.execute(prompt, config["vault"]["path"], model)
-            execution_success = True
-            print(f"Task completed successfully: '{prompt}'")
-            send_notification_alert(config, f"OAB Task Completed: '{prompt}'")
-        except Exception as e:
-            execution_success = False
-            error_details = str(e)
-            output_text = error_details
-            print(f"Task failed: '{prompt}' - Error: {e}", file=sys.stderr)
-            send_notification_alert(config, f"OAB Task Failed: '{prompt}' - Error: {e}")
-        
-        # Replicate log back to logs.md
-        replicate_log(config["vault"]["path"], config["vault"]["agent_dir"], prompt, model, execution_success, output_text, error_details)
-
-        # 3. Mutate state to Completed or Failed
-        final_tag = "/second-brain-task-completed" if execution_success else "/second-brain-task-failed"
-        completed_block = running_block.replace("/second-brain-task-running", final_tag, 1)
-        current_content = current_content.replace(running_block, completed_block, 1)
-        
-        try:
-            with open(filepath, "w", encoding="utf-8") as f:
-                f.write(current_content)
-        except Exception as e:
-            print(f"Failed to write final status to file: {e}", file=sys.stderr)
-            return
+        else:
+            # Run task immediately
+            running_block = original_block.replace("/second-brain-task", "/second-brain-task-running", 1)
+            current_content = current_content.replace(original_block, running_block, 1)
+            
+            try:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(current_content)
+                send_notification_alert(config, f"OAB Task Running: '{prompt}'")
+            except Exception as e:
+                print(f"Failed to write running status to file: {e}", file=sys.stderr)
+                return
+                
+            execute_task_pipeline(filepath, running_block, prompt, config)
 
 def scan_vault(vault_path: str, agent_dir_rel: str, config: Dict[str, Any]) -> None:
     """Scans Obsidian vault for modified markdown files containing tasks."""

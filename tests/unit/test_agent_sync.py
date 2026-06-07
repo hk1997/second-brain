@@ -157,5 +157,118 @@ class TestAgentSync(unittest.TestCase):
         # Assert process_file was called for the modified note
         mock_process_file.assert_called_once_with(note_path, self.config)
 
+    @patch("scripts.agent_sync.send_notification_alert")
+    def test_process_file_requires_approval_due_to_write_files(self, mock_alert):
+        # Create note with write_files in YAML frontmatter
+        note_path = os.path.join(self.vault_path, "write-task.md")
+        note_content = (
+            "---\n"
+            "write_files:\n"
+            "  - Projects/website.md\n"
+            "---\n"
+            "/second-brain-task\n"
+            "Modify the main title\n"
+            "<end-task>"
+        )
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write(note_content)
+
+        # Run process
+        agent_sync.process_file(note_path, self.config)
+
+        # Read back
+        with open(note_path, "r", encoding="utf-8") as f:
+            final_content = f.read()
+
+        # Assert task is pending approval and UI is appended
+        self.assertIn("/second-brain-task-pending-approval", final_content)
+        self.assertIn("[Approval Required]", final_content)
+        self.assertIn("- [ ] Approve Task", final_content)
+        mock_alert.assert_called_once()
+
+    @patch("scripts.agent_sync.send_notification_alert")
+    def test_process_file_requires_approval_due_to_dangerous_keywords(self, mock_alert):
+        # Create note with dangerous keyword in prompt
+        note_path = os.path.join(self.vault_path, "dangerous-task.md")
+        note_content = (
+            "/second-brain-task\n"
+            "delete all file under Projects/tmp\n"
+            "<end-task>"
+        )
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write(note_content)
+
+        # Run process
+        agent_sync.process_file(note_path, self.config)
+
+        # Read back
+        with open(note_path, "r", encoding="utf-8") as f:
+            final_content = f.read()
+
+        # Assert task is pending approval
+        self.assertIn("/second-brain-task-pending-approval", final_content)
+        self.assertIn("- [ ] Approve Task", final_content)
+
+    @patch("scripts.agent_sync.send_notification_alert")
+    @patch("scripts.agent_sync.execute_task_pipeline")
+    def test_process_file_approved_resumes(self, mock_pipeline, mock_alert):
+        # Create note already in pending approval state and checked Approved
+        note_path = os.path.join(self.vault_path, "approved-task.md")
+        note_content = (
+            "/second-brain-task-pending-approval\n"
+            "Create a calendar event\n"
+            "<end-task>\n\n"
+            "### [Approval Required] Run Task\n"
+            "- [x] Approve Task\n"
+            "- [ ] Reject Task\n"
+        )
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write(note_content)
+
+        # Run process
+        agent_sync.process_file(note_path, self.config)
+
+        # Read back
+        with open(note_path, "r", encoding="utf-8") as f:
+            final_content = f.read()
+
+        # Assert approval UI is stripped
+        self.assertNotIn("### [Approval Required]", final_content)
+        self.assertNotIn("- [x] Approve Task", final_content)
+        
+        # Assert pipeline was executed with running state tag
+        mock_pipeline.assert_called_once_with(note_path, "/second-brain-task-running\nCreate a calendar event\n<end-task>", "Create a calendar event", self.config)
+
+    @patch("scripts.agent_sync.send_notification_alert")
+    @patch("scripts.agent_sync.execute_task_pipeline")
+    def test_process_file_rejected_fails(self, mock_pipeline, mock_alert):
+        # Create note already in pending approval state and checked Rejected
+        note_path = os.path.join(self.vault_path, "rejected-task.md")
+        note_content = (
+            "/second-brain-task-pending-approval\n"
+            "Create a calendar event\n"
+            "<end-task>\n\n"
+            "### [Approval Required] Run Task\n"
+            "- [ ] Approve Task\n"
+            "- [x] Reject Task\n"
+        )
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write(note_content)
+
+        # Run process
+        agent_sync.process_file(note_path, self.config)
+
+        # Read back
+        with open(note_path, "r", encoding="utf-8") as f:
+            final_content = f.read()
+
+        # Assert tag mutated to failed and error log appended
+        self.assertIn("/second-brain-task-failed", final_content)
+        self.assertIn("Task execution rejected by user.", final_content)
+        self.assertNotIn("### [Approval Required]", final_content)
+        
+        # Assert pipeline was NEVER executed
+        mock_pipeline.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
