@@ -62,9 +62,10 @@ class TestAgentSync(unittest.TestCase):
         with open(note_path, "r", encoding="utf-8") as f:
             self.assertEqual(f.read(), note_content)
 
+    @patch("scripts.agent_sync.send_notification_alert")
     @patch("scripts.agent_sync.route_task")
     @patch("scripts.providers.agy.AgyProvider.execute")
-    def test_process_file_with_task_mutation(self, mock_execute, mock_route):
+    def test_process_file_with_task_mutation(self, mock_execute, mock_route, mock_alert):
         # Mock successful provider and route runs
         mock_route.return_value = {"complexity": "simple", "model_recommendation": "gemini-1.5-flash", "required_mcp_servers": []}
         mock_execute.return_value = "Mocked execution output"
@@ -102,9 +103,13 @@ class TestAgentSync(unittest.TestCase):
         self.assertIn("Create a Google Calendar entry for dentist tomorrow at 10 AM", logs_content)
         self.assertIn("Mocked execution output", logs_content)
 
+        # Assert notification alerts were triggered
+        self.assertTrue(mock_alert.called)
+
+    @patch("scripts.agent_sync.send_notification_alert")
     @patch("scripts.agent_sync.route_task")
     @patch("scripts.providers.agy.AgyProvider.execute")
-    def test_process_file_multiline_task(self, mock_execute, mock_route):
+    def test_process_file_multiline_task(self, mock_execute, mock_route, mock_alert):
         # Mock successful provider and route runs
         mock_route.return_value = {"complexity": "simple", "model_recommendation": "gemini-1.5-flash", "required_mcp_servers": []}
         mock_execute.return_value = "Mocked execution output"
