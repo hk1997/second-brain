@@ -1,0 +1,24 @@
+{
+  "vault": {
+    "path": "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/iCloudObsidian",
+    "agent_dir": "_System/Agent"
+  },
+  "security": {
+    "sandbox_exec_enabled": true,
+    "dangerous_tools": [
+      "execute_command",
+      "run_command",
+      "delete_file",
+      "git_push"
+    ]
+  },
+  "notifications": {
+    "enabled": true,
+    "imessage_target": "khandelwal.hardik14@gmail.com"
+  },
+  "execution": {
+    "default_provider": "agy",
+    "default_model": "gemini-1.5-flash",
+    "pro_model": "gemini-1.5-pro"
+  }
+}

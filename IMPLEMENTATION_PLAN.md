@@ -5,16 +5,16 @@ This document serves as the single source of truth for tracking the implementati
 ---
 
 ## Progress Overview
-* **Overall Progress:** 0%
+* **Overall Progress:** 6%
 * **Current Phase:** Phase 1: Core Watcher & Configuration Setup
-* **Current Task:** Setup workspace configurations
+* **Current Task:** Implement incremental scanner (Task 1.2)
 
 ---
 
 ## Phase 1: Core Watcher & Configuration Setup
 *Goal: Initialize the repository config and establish the filesystem watcher loop that detects and mutates inline task blocks.*
 
-- [ ] **Task 1.1: Environment Configuration**
+- [x] **Task 1.1: Environment Configuration**
   * Create `config/config.json` following the specified schema (Vault path, security, notifications).
 - [ ] **Task 1.2: Incremental File Scanner**
   * Implement `scripts/agent_sync.py` containing the `mtime`-based incremental scanner to scan only recently modified files.
