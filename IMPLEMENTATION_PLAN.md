@@ -5,9 +5,9 @@ This document serves as the single source of truth for tracking the implementati
 ---
 
 ## Progress Overview
-* **Overall Progress:** 50%
-* **Current Phase:** Phase 4: MCP Servers & Native AppleScript Integration
-* **Current Task:** Setup Google OAuth Credentials (Task 4.1)
+* **Overall Progress:** 62%
+* **Current Phase:** Phase 5: Markdown Approval Gate
+* **Current Task:** Setup tool interception for dangerous actions (Task 5.1)
 
 ---
 
@@ -49,10 +49,10 @@ This document serves as the single source of truth for tracking the implementati
 ## Phase 4: MCP Servers & Native AppleScript Integration
 *Goal: Setup Google Calendar/Tasks APIs and write the local macOS system messaging bridge.*
 
-- [ ] **Task 4.1: Google OAuth Credentials & Server Setup**
+- [x] **Task 4.1: Google OAuth Credentials & Server Setup**
   * Register a Google Cloud console application and configure `@modelcontextprotocol/server-google-calendar` in `mcp_config.json`.
   * Perform the initial authentication flow to cache the token.
-- [ ] **Task 4.2: Native Notifications MCP Server**
+- [x] **Task 4.2: Native Notifications MCP Server**
   * Implement `scripts/mcp_mac_server.py` as a lightweight JSON-RPC stdin/stdout server.
   * Implement the AppleScript bridge to send iMessage updates to the user's phone.
 

@@ -4,6 +4,7 @@ import re
 import sys
 import json
 import time
+import subprocess
 from typing import Dict, Any, List
 
 from scripts.providers.agy import AgyProvider
@@ -50,6 +51,29 @@ def set_last_scan_time(agent_dir: str, scan_time: float) -> None:
             json.dump({"last_scan_time": scan_time}, f)
     except Exception as e:
         print(f"Warning: Failed to save scan state: {e}", file=sys.stderr)
+
+def send_notification_alert(config: Dict[str, Any], message: str) -> None:
+    """Sends an iMessage notification alert if notifications are enabled."""
+    if not config.get("notifications", {}).get("enabled", True):
+        return
+        
+    target = config["notifications"].get("imessage_target")
+    if not target:
+        return
+        
+    escaped_message = message.replace('"', '\\"')
+    applescript = f'''
+    tell application "Messages"
+        set targetService to 1st service whose service type is iMessage
+        set targetBuddy to buddy "{target}" of targetService
+        send "{escaped_message}" to targetBuddy
+    end tell
+    '''
+    try:
+        # Spawn asynchronously so it doesn't block the watcher loop
+        subprocess.Popen(["osascript", "-e", applescript], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"Warning: Failed to trigger notification alert: {e}", file=sys.stderr)
 
 def replicate_log(vault_path: str, agent_dir_rel: str, prompt: str, model: str, success: bool, output: str, error: str = None) -> None:
     """Appends execution log entry to _System/Agent/logs.md."""
@@ -117,6 +141,8 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         try:
             with open(filepath, "w", encoding="utf-8") as f:
                 f.write(current_content)
+            # Notify user
+            send_notification_alert(config, f"OAB Task Running: '{prompt}'")
         except Exception as e:
             print(f"Failed to write running status to file: {e}", file=sys.stderr)
             return
@@ -141,11 +167,13 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
             output_text = provider.execute(prompt, config["vault"]["path"], model)
             execution_success = True
             print(f"Task completed successfully: '{prompt}'")
+            send_notification_alert(config, f"OAB Task Completed: '{prompt}'")
         except Exception as e:
             execution_success = False
             error_details = str(e)
             output_text = error_details
             print(f"Task failed: '{prompt}' - Error: {e}", file=sys.stderr)
+            send_notification_alert(config, f"OAB Task Failed: '{prompt}' - Error: {e}")
         
         # Replicate log back to logs.md
         replicate_log(config["vault"]["path"], config["vault"]["agent_dir"], prompt, model, execution_success, output_text, error_details)
