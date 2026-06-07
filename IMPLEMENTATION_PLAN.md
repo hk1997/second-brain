@@ -5,9 +5,9 @@ This document serves as the single source of truth for tracking the implementati
 ---
 
 ## Progress Overview
-* **Overall Progress:** 6%
-* **Current Phase:** Phase 1: Core Watcher & Configuration Setup
-* **Current Task:** Implement incremental scanner (Task 1.2)
+* **Overall Progress:** 19%
+* **Current Phase:** Phase 2: macOS Sandbox & Execution Provider
+* **Current Task:** Setup dynamic sandbox profiles (Task 2.1)
 
 ---
 
@@ -16,9 +16,9 @@ This document serves as the single source of truth for tracking the implementati
 
 - [x] **Task 1.1: Environment Configuration**
   * Create `config/config.json` following the specified schema (Vault path, security, notifications).
-- [ ] **Task 1.2: Incremental File Scanner**
+- [x] **Task 1.2: Incremental File Scanner**
   * Implement `scripts/agent_sync.py` containing the `mtime`-based incremental scanner to scan only recently modified files.
-- [ ] **Task 1.3: Tag State Mutation Parser**
+- [x] **Task 1.3: Tag State Mutation Parser**
   * Add parsing logic to extract commands between `/second-brain-task` and `<end-task>`.
   * Implement note mutation: `/second-brain-task` -> `/second-brain-task-running` -> `/second-brain-task-completed` / `failed`.
 
