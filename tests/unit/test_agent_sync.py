@@ -375,5 +375,31 @@ class TestAgentSync(unittest.TestCase):
         self.assertIn("- [-] #agent Simple task", final_content)
         self.assertIn("  * ❌ Error: Sandbox permission denied", final_content)
 
+    @patch("scripts.agent_sync.send_notification_alert")
+    @patch("scripts.agent_sync.route_task")
+    @patch("scripts.providers.agy.AgyProvider.execute")
+    def test_tag_at_end_of_line(self, mock_execute, mock_route, mock_alert):
+        mock_route.return_value = {
+            "complexity": "simple",
+            "model_recommendation": "gemini-1.5-flash",
+            "required_mcp_servers": []
+        }
+        mock_execute.return_value = "Success"
+
+        note_path = os.path.join(self.vault_path, "tag-end-test.md")
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write("- [ ] Simple task at end #agent")
+
+        # Run watcher scan once
+        agent_sync.process_file(note_path, self.config)
+
+        # Read final note content
+        with open(note_path, "r", encoding="utf-8") as f:
+            final_content = f.read()
+
+        # Check prompt resolution (which strips #agent) and tag preservation (replaces - [ ] with - [x] and keeps #agent at end)
+        self.assertIn("- [x] Simple task at end #agent", final_content)
+        mock_execute.assert_called_once_with("Simple task at end", self.vault_path, "gemini-1.5-flash")
+
 if __name__ == "__main__":
     unittest.main()
