@@ -9,7 +9,7 @@ Your task is to analyze the user's prompt and extract execution metadata.
 Return a JSON object containing:
 1. "complexity": "simple" (e.g. calendar, reminders, formatting notes) or "complex" (e.g. coding, refactoring, building features)
 2. "model_recommendation": "gemini-1.5-flash" (for simple tasks) or "gemini-1.5-pro" (for complex tasks)
-3. "required_mcp_servers": list of server names required for this prompt. Available options: ["google-calendar", "google-tasks", "mac-notifications"].
+3. "required_mcp_servers": list of server names required for this prompt. Available options: ["google-calendar", "google-tasks", "mac-notifications", "stock-analyzer"].
 
 You must respond ONLY with a valid JSON block inside a ```json code fence. Do not write any explanations or headers.
 
