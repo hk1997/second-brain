@@ -67,9 +67,7 @@ class TestEndToEnd(unittest.TestCase):
         note_content = (
             "# Daily Journal\n"
             "Some content before.\n"
-            "/second-brain-task\n"
-            "Create a Google Calendar entry for team meeting at 2 PM\n"
-            "<end-task>\n"
+            "- [ ] #agent Create a Google Calendar entry for team meeting at 2 PM\n"
             "Some content after."
         )
         with open(note_path, "w", encoding="utf-8") as f:
@@ -84,8 +82,9 @@ class TestEndToEnd(unittest.TestCase):
             final_content = f.read()
 
         # Assert correct tag mutation
-        self.assertNotIn("/second-brain-task\n", final_content)
-        self.assertIn("/second-brain-task-completed", final_content)
+        self.assertNotIn("- [ ] #agent Create a Google Calendar entry", final_content)
+        self.assertNotIn("- [/] #agent Create a Google Calendar entry", final_content)
+        self.assertIn("- [x] #agent Create a Google Calendar entry for team meeting at 2 PM", final_content)
 
         # Assert logs.md created and structured correctly
         logs_path = os.path.join(self.agent_dir, "logs.md")

@@ -144,8 +144,8 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
         with open(filepath, "r", encoding="utf-8") as f:
             current_content = f.read()
             
-        final_tag = "/second-brain-task-completed" if execution_success else "/second-brain-task-failed"
-        completed_block = running_block.replace("/second-brain-task-running", final_tag, 1)
+        final_tag = "- [x] #agent" if execution_success else "- [-] #agent"
+        completed_block = running_block.replace("- [/] #agent", final_tag, 1)
         current_content = current_content.replace(running_block, completed_block, 1)
         
         with open(filepath, "w", encoding="utf-8") as f:
@@ -166,15 +166,15 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         return
 
     # Check for pending approvals first!
-    pending_pattern = re.compile(r"/second-brain-task-pending-approval\s*\n?(.*?)\n?<end-task>", re.DOTALL)
+    pending_pattern = re.compile(r"^(\s*-\s*\[\s*[ ]\s*\]\s*#agent-pending-approval\s+)(.*)$", re.MULTILINE)
     pending_matches = list(pending_pattern.finditer(content))
     
     current_content = content
     
     if pending_matches:
         for match in pending_matches:
-            original_block = match.group(0)
-            prompt = match.group(1).strip()
+            original_line = match.group(0)
+            prompt = match.group(2).strip()
             
             # Check note for checkboxes
             is_approved = "- [x] Approve Task" in content
@@ -183,11 +183,11 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
             if is_approved:
                 print(f"Task approved by user: '{prompt}'")
                 # Clean up approval block and update state to Running
-                clean_block = original_block.replace("/second-brain-task-pending-approval", "/second-brain-task-running")
-                current_content = current_content.replace(original_block, clean_block)
+                clean_line = original_line.replace("#agent-pending-approval", "#agent").replace("- [ ]", "- [/]")
+                current_content = current_content.replace(original_line, clean_line)
                 # Strip out approval checklist block
                 current_content = re.sub(
-                    r"### \[Approval Required\].*?- \[[x ]\] Approve Task\s*\n?- \[[x ]\] Reject Task\s*\n?", 
+                    r"\n*### \[Approval Required\].*?- \[[x ]\] Approve Task\s*\n?- \[[x ]\] Reject Task\s*\n?", 
                     "", 
                     current_content, 
                     flags=re.DOTALL
@@ -202,17 +202,17 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                     return
                 
                 # Execute pipeline
-                execute_task_pipeline(filepath, clean_block, prompt, config)
+                execute_task_pipeline(filepath, clean_line, prompt, config)
                 return
                 
             elif is_rejected:
                 print(f"Task rejected by user: '{prompt}'")
-                # Update state to Failed
-                failed_block = original_block.replace("/second-brain-task-pending-approval", "/second-brain-task-failed")
-                current_content = current_content.replace(original_block, failed_block)
+                # Update state to Failed (Cancelled)
+                failed_line = original_line.replace("#agent-pending-approval", "#agent").replace("- [ ]", "- [-]")
+                current_content = current_content.replace(original_line, failed_line)
                 # Strip out approval checklist block
                 current_content = re.sub(
-                    r"### \[Approval Required\].*?- \[[x ]\] Approve Task\s*\n?- \[[x ]\] Reject Task\s*\n?", 
+                    r"\n*### \[Approval Required\].*?- \[[x ]\] Approve Task\s*\n?- \[[x ]\] Reject Task\s*\n?", 
                     "", 
                     current_content, 
                     flags=re.DOTALL
@@ -233,7 +233,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 return
 
     # Check for new tasks
-    task_pattern = re.compile(r"/second-brain-task(?![a-zA-Z0-9_-])\s*\n?(.*?)\n?<end-task>", re.DOTALL)
+    task_pattern = re.compile(r"^(\s*-\s*\[\s*[ ]\s*\]\s*#agent\s+)(.*)$", re.MULTILINE)
     matches = list(task_pattern.finditer(current_content))
     if not matches:
         return
@@ -241,8 +241,8 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
     print(f"Scanning: {os.path.basename(filepath)} - Found {len(matches)} task(s)")
     
     for match in matches:
-        original_block = match.group(0)
-        prompt = match.group(1).strip()
+        original_line = match.group(0)
+        prompt = match.group(2).strip()
         
         print(f"Task detected: '{prompt}'")
         
@@ -263,8 +263,8 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         
         if has_write_files or has_dangerous_keywords:
             print(f"Task '{prompt}' requires manual approval. Inserting approval checklist...")
-            pending_block = original_block.replace("/second-brain-task", "/second-brain-task-pending-approval")
-            current_content = current_content.replace(original_block, pending_block)
+            pending_line = original_line.replace("#agent", "#agent-pending-approval")
+            current_content = current_content.replace(original_line, pending_line)
             
             # Construct interactive checklist block
             approval_ui = (
@@ -273,9 +273,10 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 "- [ ] Approve Task\n"
                 "- [ ] Reject Task\n"
             )
-            block_index = current_content.find(pending_block)
-            if block_index != -1:
-                insert_pos = block_index + len(pending_block)
+            # Find the position right after the pending line
+            line_index = current_content.find(pending_line)
+            if line_index != -1:
+                insert_pos = line_index + len(pending_line)
                 current_content = current_content[:insert_pos] + approval_ui + current_content[insert_pos:]
             else:
                 current_content += approval_ui
@@ -289,8 +290,8 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
             return
         else:
             # Run task immediately
-            running_block = original_block.replace("/second-brain-task", "/second-brain-task-running", 1)
-            current_content = current_content.replace(original_block, running_block, 1)
+            running_line = original_line.replace("- [ ]", "- [/]")
+            current_content = current_content.replace(original_line, running_line, 1)
             
             try:
                 with open(filepath, "w", encoding="utf-8") as f:
@@ -300,7 +301,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 print(f"Failed to write running status to file: {e}", file=sys.stderr)
                 return
                 
-            execute_task_pipeline(filepath, running_block, prompt, config)
+            execute_task_pipeline(filepath, running_line, prompt, config)
 
 def scan_vault(vault_path: str, agent_dir_rel: str, config: Dict[str, Any]) -> None:
     """Scans Obsidian vault for modified markdown files containing tasks."""

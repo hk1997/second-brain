@@ -74,9 +74,7 @@ class TestAgentSync(unittest.TestCase):
         note_path = os.path.join(self.vault_path, "note.md")
         note_content = (
             "Start of note\n"
-            "/second-brain-task\n"
-            "Create a Google Calendar entry for dentist tomorrow at 10 AM\n"
-            "<end-task>\n"
+            "- [ ] #agent Create a Google Calendar entry for dentist tomorrow at 10 AM\n"
             "End of note"
         )
         with open(note_path, "w", encoding="utf-8") as f:
@@ -90,10 +88,9 @@ class TestAgentSync(unittest.TestCase):
             final_content = f.read()
 
         # Assert correct state transitions
-        self.assertIsNone(re.search(r"/second-brain-task(?![a-zA-Z0-9_-])", final_content))
-        self.assertNotIn("/second-brain-task-running", final_content)
-        self.assertIn("/second-brain-task-completed", final_content)
-        self.assertIn("Create a Google Calendar entry for dentist tomorrow at 10 AM", final_content)
+        self.assertNotIn("- [ ] #agent Create a Google Calendar", final_content)
+        self.assertNotIn("- [/] #agent Create a Google Calendar", final_content)
+        self.assertIn("- [x] #agent Create a Google Calendar", final_content)
 
         # Assert logs.md was created and populated
         logs_path = os.path.join(self.agent_dir, "logs.md")
@@ -114,13 +111,10 @@ class TestAgentSync(unittest.TestCase):
         mock_route.return_value = {"complexity": "simple", "model_recommendation": "gemini-1.5-flash", "required_mcp_servers": []}
         mock_execute.return_value = "Mocked execution output"
 
-        # Create note with a multi-line task
+        # Create note with a task
         note_path = os.path.join(self.vault_path, "note.md")
         note_content = (
-            "/second-brain-task\n"
-            "Line 1 of task instructions\n"
-            "Line 2 of task instructions\n"
-            "<end-task>"
+            "- [ ] #agent Line 1 of task instructions"
         )
         with open(note_path, "w", encoding="utf-8") as f:
             f.write(note_content)
@@ -133,16 +127,14 @@ class TestAgentSync(unittest.TestCase):
             final_content = f.read()
 
         # Assert mutability
-        self.assertIn("/second-brain-task-completed", final_content)
-        self.assertIn("Line 1 of task instructions", final_content)
-        self.assertIn("Line 2 of task instructions", final_content)
+        self.assertIn("- [x] #agent Line 1 of task instructions", final_content)
 
     @patch("scripts.agent_sync.process_file")
     def test_scan_vault_finds_modified_files(self, mock_process_file):
         # Create note
         note_path = os.path.join(self.vault_path, "task.md")
         with open(note_path, "w", encoding="utf-8") as f:
-            f.write("/second-brain-task\nTest\n<end-task>")
+            f.write("- [ ] #agent Test")
 
         # Force state to be older than file modification time
         last_scan = time.time() - 10.0
@@ -166,9 +158,7 @@ class TestAgentSync(unittest.TestCase):
             "write_files:\n"
             "  - Projects/website.md\n"
             "---\n"
-            "/second-brain-task\n"
-            "Modify the main title\n"
-            "<end-task>"
+            "- [ ] #agent Modify the main title"
         )
         with open(note_path, "w", encoding="utf-8") as f:
             f.write(note_content)
@@ -181,7 +171,7 @@ class TestAgentSync(unittest.TestCase):
             final_content = f.read()
 
         # Assert task is pending approval and UI is appended
-        self.assertIn("/second-brain-task-pending-approval", final_content)
+        self.assertIn("- [ ] #agent-pending-approval Modify the main title", final_content)
         self.assertIn("[Approval Required]", final_content)
         self.assertIn("- [ ] Approve Task", final_content)
         mock_alert.assert_called_once()
@@ -191,9 +181,7 @@ class TestAgentSync(unittest.TestCase):
         # Create note with dangerous keyword in prompt
         note_path = os.path.join(self.vault_path, "dangerous-task.md")
         note_content = (
-            "/second-brain-task\n"
-            "delete all file under Projects/tmp\n"
-            "<end-task>"
+            "- [ ] #agent delete all file under Projects/tmp"
         )
         with open(note_path, "w", encoding="utf-8") as f:
             f.write(note_content)
@@ -206,7 +194,7 @@ class TestAgentSync(unittest.TestCase):
             final_content = f.read()
 
         # Assert task is pending approval
-        self.assertIn("/second-brain-task-pending-approval", final_content)
+        self.assertIn("- [ ] #agent-pending-approval delete all file under Projects/tmp", final_content)
         self.assertIn("- [ ] Approve Task", final_content)
 
     @patch("scripts.agent_sync.send_notification_alert")
@@ -215,9 +203,7 @@ class TestAgentSync(unittest.TestCase):
         # Create note already in pending approval state and checked Approved
         note_path = os.path.join(self.vault_path, "approved-task.md")
         note_content = (
-            "/second-brain-task-pending-approval\n"
-            "Create a calendar event\n"
-            "<end-task>\n\n"
+            "- [ ] #agent-pending-approval Create a calendar event\n\n"
             "### [Approval Required] Run Task\n"
             "- [x] Approve Task\n"
             "- [ ] Reject Task\n"
@@ -237,7 +223,7 @@ class TestAgentSync(unittest.TestCase):
         self.assertNotIn("- [x] Approve Task", final_content)
         
         # Assert pipeline was executed with running state tag
-        mock_pipeline.assert_called_once_with(note_path, "/second-brain-task-running\nCreate a calendar event\n<end-task>", "Create a calendar event", self.config)
+        mock_pipeline.assert_called_once_with(note_path, "- [/] #agent Create a calendar event", "Create a calendar event", self.config)
 
     @patch("scripts.agent_sync.send_notification_alert")
     @patch("scripts.agent_sync.execute_task_pipeline")
@@ -245,9 +231,7 @@ class TestAgentSync(unittest.TestCase):
         # Create note already in pending approval state and checked Rejected
         note_path = os.path.join(self.vault_path, "rejected-task.md")
         note_content = (
-            "/second-brain-task-pending-approval\n"
-            "Create a calendar event\n"
-            "<end-task>\n\n"
+            "- [ ] #agent-pending-approval Create a calendar event\n\n"
             "### [Approval Required] Run Task\n"
             "- [ ] Approve Task\n"
             "- [x] Reject Task\n"
@@ -263,7 +247,7 @@ class TestAgentSync(unittest.TestCase):
             final_content = f.read()
 
         # Assert tag mutated to failed and error log appended
-        self.assertIn("/second-brain-task-failed", final_content)
+        self.assertIn("- [-] #agent Create a calendar event", final_content)
         self.assertIn("Task execution rejected by user.", final_content)
         self.assertNotIn("### [Approval Required]", final_content)
         
