@@ -339,8 +339,15 @@ class TestAgentSync(unittest.TestCase):
         with open(note_path, "r", encoding="utf-8") as f:
             final_content = f.read()
 
-        # On success, progress log lines should be removed, and task set to [x]
-        self.assertEqual(final_content.strip(), "- [x] #agent Simple task")
+        # On success, progress log lines should be removed, and task set to [x] with the details block output
+        expected_content = (
+            "- [x] #agent Simple task\n"
+            "  <details>\n"
+            "  <summary>🤖 View Output</summary>\n\n"
+            "  Success\n"
+            "  </details>"
+        )
+        self.assertEqual(final_content.strip(), expected_content)
 
     @patch("scripts.agent_sync.send_notification_alert")
     @patch("scripts.agent_sync.route_task")
