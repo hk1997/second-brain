@@ -253,6 +253,19 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
     model = metadata["model_recommendation"]
     print(f"Task routed to {model} (Complexity: {metadata['complexity']}, MCP tools: {metadata['required_mcp_servers']})")
     
+    # Update progress in the file to "Executing"
+    running_line = running_block.splitlines()[0]
+    next_running_block = running_line + f"\n  * 🟢 Routed to {model}\n  * 🟢 Executing task..."
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+        content = content.replace(running_block, next_running_block, 1)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        running_block = next_running_block
+    except Exception as e:
+        print(f"Failed to update progress: {e}", file=sys.stderr)
+        
     sandbox_enabled = config["security"]["sandbox_exec_enabled"]
     provider = AgyProvider(sandbox_enabled=sandbox_enabled)
     
@@ -280,8 +293,15 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
         with open(filepath, "r", encoding="utf-8") as f:
             current_content = f.read()
             
-        final_tag = "- [x] #agent" if execution_success else "- [-] #agent"
-        completed_block = running_block.replace("- [/] #agent", final_tag, 1)
+        running_line = running_block.splitlines()[0]
+        if execution_success:
+            final_tag = "- [x] #agent"
+            completed_block = running_line.replace("- [/] #agent", final_tag, 1)
+        else:
+            final_tag = "- [-] #agent"
+            error_line = error_details.splitlines()[0] if error_details else "Unknown error"
+            completed_block = running_line.replace("- [/] #agent", final_tag, 1) + f"\n  * ❌ Error: {error_line}"
+            
         current_content = current_content.replace(running_block, completed_block, 1)
         
         with open(filepath, "w", encoding="utf-8") as f:
@@ -320,7 +340,8 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 print(f"Task approved by user: '{prompt}'")
                 # Clean up approval block and update state to Running
                 clean_line = original_line.replace("#agent-pending-approval", "#agent").replace("- [ ]", "- [/]")
-                current_content = current_content.replace(original_line, clean_line)
+                running_block = clean_line + "\n  * 🟢 Routing task..."
+                current_content = current_content.replace(original_line, running_block)
                 # Strip out approval checklist block
                 current_content = re.sub(
                     r"\n*### \[Approval Required\].*?- \[[x ]\] Approve Task\s*\n?- \[[x ]\] Reject Task\s*\n?", 
@@ -339,7 +360,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 
                 # Execute pipeline
                 resolved_prompt = resolve_and_interpolate_prompt(prompt, config["vault"]["path"], config["vault"]["agent_dir"])
-                execute_task_pipeline(filepath, clean_line, resolved_prompt, config)
+                execute_task_pipeline(filepath, running_block, resolved_prompt, config)
                 return
                 
             elif is_rejected:
@@ -431,7 +452,8 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         else:
             # Run task immediately
             running_line = original_line.replace("- [ ]", "- [/]")
-            current_content = current_content.replace(original_line, running_line, 1)
+            running_block = running_line + "\n  * 🟢 Routing task..."
+            current_content = current_content.replace(original_line, running_block, 1)
             
             try:
                 with open(filepath, "w", encoding="utf-8") as f:
@@ -441,7 +463,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 print(f"Failed to write running status to file: {e}", file=sys.stderr)
                 return
                 
-            execute_task_pipeline(filepath, running_line, resolved_prompt, config)
+            execute_task_pipeline(filepath, running_block, resolved_prompt, config)
 
 def scan_vault(vault_path: str, agent_dir_rel: str, config: Dict[str, Any]) -> None:
     """Scans Obsidian vault for modified markdown files containing tasks."""

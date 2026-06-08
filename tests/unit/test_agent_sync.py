@@ -222,8 +222,8 @@ class TestAgentSync(unittest.TestCase):
         self.assertNotIn("### [Approval Required]", final_content)
         self.assertNotIn("- [x] Approve Task", final_content)
         
-        # Assert pipeline was executed with running state tag
-        mock_pipeline.assert_called_once_with(note_path, "- [/] #agent Create a calendar event", "Create a calendar event", self.config)
+        # Assert pipeline was executed with running state tag and progress logs
+        mock_pipeline.assert_called_once_with(note_path, "- [/] #agent Create a calendar event\n  * 🟢 Routing task...", "Create a calendar event", self.config)
 
     @patch("scripts.agent_sync.send_notification_alert")
     @patch("scripts.agent_sync.execute_task_pipeline")
@@ -316,6 +316,57 @@ class TestAgentSync(unittest.TestCase):
         self.assertTrue(resolved.startswith(f"Review Today and note accomplishments on {current_date}"))
         self.assertIn("--- Context: Today ---", resolved)
         self.assertIn("Today I coded python.", resolved)
+
+    @patch("scripts.agent_sync.send_notification_alert")
+    @patch("scripts.agent_sync.route_task")
+    @patch("scripts.providers.agy.AgyProvider.execute")
+    def test_progress_logging_transitions(self, mock_execute, mock_route, mock_alert):
+        mock_route.return_value = {
+            "complexity": "simple",
+            "model_recommendation": "gemini-1.5-flash",
+            "required_mcp_servers": []
+        }
+        mock_execute.return_value = "Success"
+
+        note_path = os.path.join(self.vault_path, "progress-test.md")
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write("- [ ] #agent Simple task")
+
+        # Run watcher scan once
+        agent_sync.process_file(note_path, self.config)
+
+        # Read final note content
+        with open(note_path, "r", encoding="utf-8") as f:
+            final_content = f.read()
+
+        # On success, progress log lines should be removed, and task set to [x]
+        self.assertEqual(final_content.strip(), "- [x] #agent Simple task")
+
+    @patch("scripts.agent_sync.send_notification_alert")
+    @patch("scripts.agent_sync.route_task")
+    @patch("scripts.providers.agy.AgyProvider.execute")
+    def test_progress_logging_failure_retains_error(self, mock_execute, mock_route, mock_alert):
+        mock_route.return_value = {
+            "complexity": "simple",
+            "model_recommendation": "gemini-1.5-flash",
+            "required_mcp_servers": []
+        }
+        mock_execute.side_effect = Exception("Sandbox permission denied")
+
+        note_path = os.path.join(self.vault_path, "progress-fail-test.md")
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write("- [ ] #agent Simple task")
+
+        # Run watcher scan once
+        agent_sync.process_file(note_path, self.config)
+
+        # Read final note content
+        with open(note_path, "r", encoding="utf-8") as f:
+            final_content = f.read()
+
+        # On failure, error bullet should be appended
+        self.assertIn("- [-] #agent Simple task", final_content)
+        self.assertIn("  * ❌ Error: Sandbox permission denied", final_content)
 
 if __name__ == "__main__":
     unittest.main()
