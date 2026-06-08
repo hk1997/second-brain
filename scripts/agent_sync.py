@@ -257,14 +257,21 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
     print(f"Task routed to {model} (Complexity: {metadata['complexity']}, MCP tools: {metadata['required_mcp_servers']})")
     
     # Update progress in the file to "Executing"
-    running_line = running_block.splitlines()[0]
+    running_line = ""
+    for line in running_block.splitlines():
+        if "- [/]" in line:
+            running_line = line
+            break
+    if not running_line:
+        running_line = running_block.splitlines()[0]
+        
     next_running_block = running_line + f"\n  * 🟢 Routed to {model}\n  * 🟢 Executing task..."
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
-        content = content.replace(running_block, next_running_block, 1)
+        new_content = content.replace(running_block, next_running_block, 1)
         with open(filepath, "w", encoding="utf-8") as f:
-            f.write(content)
+            f.write(new_content)
         running_block = next_running_block
     except Exception as e:
         print(f"Failed to update progress: {e}", file=sys.stderr)
@@ -296,7 +303,14 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
         with open(filepath, "r", encoding="utf-8") as f:
             current_content = f.read()
             
-        running_line = running_block.splitlines()[0]
+        running_line = ""
+        for line in running_block.splitlines():
+            if "- [/]" in line:
+                running_line = line
+                break
+        if not running_line:
+            running_line = running_block.splitlines()[0]
+            
         if execution_success:
             final_tag = "- [x] #agent"
             completed_block = running_line.replace("- [/] #agent", final_tag, 1)
@@ -305,10 +319,10 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
             error_line = error_details.splitlines()[0] if error_details else "Unknown error"
             completed_block = running_line.replace("- [/] #agent", final_tag, 1) + f"\n  * ❌ Error: {error_line}"
             
-        current_content = current_content.replace(running_block, completed_block, 1)
+        new_content = current_content.replace(running_block, completed_block, 1)
         
         with open(filepath, "w", encoding="utf-8") as f:
-            f.write(current_content)
+            f.write(new_content)
     except Exception as e:
         print(f"Failed to write final status to file: {e}", file=sys.stderr)
         return False
@@ -325,7 +339,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         return
 
     # Check for pending approvals first!
-    pending_pattern = re.compile(r"^(\s*-\s*\[\s*[ ]\s*\]\s*#agent-pending-approval\s+)(.*)$", re.MULTILINE)
+    pending_pattern = re.compile(r"^([ \t]*-[ \t]*\[[ \t]*[ ][ \t]*\][ \t]*#agent-pending-approval[ \t]+)(.*)$", re.MULTILINE)
     pending_matches = list(pending_pattern.finditer(content))
     
     current_content = content
@@ -394,7 +408,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 return
 
     # Check for new tasks
-    task_pattern = re.compile(r"^(\s*-\s*\[\s*[ ]\s*\]\s*#agent\s+)(.*)$", re.MULTILINE)
+    task_pattern = re.compile(r"^([ \t]*-[ \t]*\[[ \t]*[ ][ \t]*\][ \t]*#agent[ \t]+)(.*)$", re.MULTILINE)
     matches = list(task_pattern.finditer(current_content))
     if not matches:
         return
