@@ -531,7 +531,9 @@ def scan_vault(vault_path: str, agent_dir_rel: str, config: Dict[str, Any]) -> N
                 try:
                     mtime = os.path.getmtime(filepath)
                     # Scan files modified since last scan
-                    if mtime > last_scan_time:
+                    # We subtract a 30-second buffer to handle clock drift and filesystem write sync latency.
+                    # As OAB tasks transition states upon match, duplicate triggers are naturally prevented.
+                    if mtime > (last_scan_time - 30.0 if last_scan_time > 0.0 else 0.0):
                         process_file(filepath, config)
                 except Exception as e:
                     print(f"Error inspecting file modification time for {file}: {e}", file=sys.stderr)
