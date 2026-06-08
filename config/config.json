@@ -13,7 +13,7 @@
     ]
   },
   "notifications": {
-    "enabled": true,
+    "enabled": false,
     "imessage_target": "khandelwal.hardik14@gmail.com"
   },
   "execution": {
