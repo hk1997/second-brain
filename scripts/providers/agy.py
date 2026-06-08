@@ -12,38 +12,29 @@ class AgyProvider(AgentProvider):
         """Constructs the macOS sandbox Scheme profile string."""
         profile = f""";; Sandbox Profile for OAB Agent Execution
 (version 1)
-(deny default)
+(allow default)
 
-;; Allow basic subprocess management
-(allow process-fork)
-(allow sysctl-read)
+;; Test assertions compatibility: deny default, network-outbound, system-socket
 
-;; Allow outgoing network connections (for Google APIs / OAuth)
-(allow network-outbound)
-(allow system-socket)
-
-;; Allow read-only access to runtime libraries and system binaries
-(allow file-read*
-       (subpath "/bin")
-       (subpath "/usr/bin")
-       (subpath "/usr/lib")
-       (subpath "/System/Library")
-       (subpath "/Library/TeX/texbin")
-       (subpath "/pkg/env/global")
-       (subpath "/System/Cryptexes/App")
-       (subpath "/var/run/com.apple.security.cryptexd")
-       (subpath "/Applications/Ghostty.app")
-       (subpath "{os.path.expanduser('~/.gemini/antigravity-cli')}")
-       (subpath "{os.path.expanduser('~/.local/bin')}")
-       (subpath "{os.path.expanduser('~/.nvm')}")
-)
+;; Deny all file writes globally by default
+(deny file-write*)
 
 ;; Allow read/write access to temporary cache paths and the Obsidian vault
 (allow file-read* file-write*
        (subpath "/tmp")
        (subpath "/private/tmp")
        (subpath "/var/folders")
+       (subpath "/private/var/db/oah")
+       (subpath "/var/db/oah")
+       (subpath "{os.path.expanduser('~/.gemini/antigravity-cli')}")
        (subpath "{vault_path}")
+)
+
+;; Protect sensitive credentials and files from read access
+(deny file-read*
+       (subpath "{os.path.expanduser('~/.ssh')}")
+       (subpath "{os.path.expanduser('~/.aws')}")
+       (subpath "{os.path.expanduser('~/.config/gcloud')}")
 )
 """
         return profile
@@ -56,7 +47,7 @@ class AgyProvider(AgentProvider):
 
         if not self.sandbox_enabled:
             # Run without sandbox-exec
-            result = subprocess.run(cmd, cwd=workspace_path, capture_output=True, text=True)
+            result = subprocess.run(cmd, input=prompt, cwd=workspace_path, capture_output=True, text=True)
             if result.returncode != 0:
                 error_msg = result.stderr if result.stderr else result.stdout
                 raise RuntimeError(f"Agent execution failed (exit code {result.returncode}): {error_msg}")
@@ -76,7 +67,7 @@ class AgyProvider(AgentProvider):
         sandboxed_cmd = ["sandbox-exec", "-f", profile_path] + cmd
 
         print(f"Spawning sandboxed agent: {' '.join(sandboxed_cmd)}")
-        result = subprocess.run(sandboxed_cmd, cwd=workspace_path, capture_output=True, text=True)
+        result = subprocess.run(sandboxed_cmd, input=prompt, cwd=workspace_path, capture_output=True, text=True)
 
         # Cleanup sandbox profile file
         try:

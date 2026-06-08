@@ -7,12 +7,15 @@ import time
 import subprocess
 from typing import Dict, Any, List
 
-from scripts.providers.agy import AgyProvider
-from scripts.router import route_task
-
 # Resolve paths relative to script location
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(SCRIPT_DIR, "..", "config", "config.json")
+
+# Add repository root to python path to resolve scripts imports
+sys.path.insert(0, os.path.abspath(os.path.join(SCRIPT_DIR, "..")))
+
+from scripts.providers.agy import AgyProvider
+from scripts.router import route_task
 
 def load_config(config_path: str = DEFAULT_CONFIG_PATH) -> Dict[str, Any]:
     """Loads configuration from config.json."""
