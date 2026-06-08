@@ -106,6 +106,142 @@ def replicate_log(vault_path: str, agent_dir_rel: str, prompt: str, model: str, 
     except Exception as e:
         print(f"Warning: Failed to write to log file: {e}", file=sys.stderr)
 
+def extract_wiki_links(text: str) -> List[str]:
+    """Extracts all wiki-link targets (without display text or anchors) from a string."""
+    raw_links = re.findall(r"\[\[(.*?)\]\]", text)
+    targets = []
+    for link in raw_links:
+        # Split display name (separated by |)
+        target = link.split("|")[0].strip()
+        # Split anchor (separated by #)
+        target = target.split("#")[0].strip()
+        if target:
+            targets.append(target)
+    return targets
+
+def find_file_in_vault(vault_path: str, filename: str) -> str:
+    """Searches the vault (case-insensitive) for a filename (with or without .md extension)."""
+    if not filename.lower().endswith(".md"):
+        filename_md = filename + ".md"
+        filename_no_md = filename
+    else:
+        filename_md = filename
+        filename_no_md = filename[:-3]
+        
+    for root, dirs, files in os.walk(vault_path):
+        # Skip hidden folders and System folder to avoid templates
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "_System"]
+        for file in files:
+            if file.lower() in (filename_md.lower(), filename_no_md.lower()):
+                return os.path.join(root, file)
+    return None
+
+def resolve_link(vault_path: str, agent_dir_rel: str, link_name: str) -> Dict[str, Any]:
+    """Resolves a wiki-link target to either a template or a context note.
+    
+    Returns a dict containing:
+      - "type": "template" | "context" | None
+      - "filepath": str | None
+      - "content": str | None
+    """
+    templates_dir = os.path.join(vault_path, agent_dir_rel, "Templates")
+    filename = link_name if link_name.lower().endswith(".md") else f"{link_name}.md"
+    
+    # 1. Check in templates first
+    if os.path.exists(templates_dir):
+        # Case-sensitive check
+        template_path = os.path.join(templates_dir, filename)
+        if os.path.exists(template_path):
+            try:
+                with open(template_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                return {"type": "template", "filepath": template_path, "content": content}
+            except Exception as e:
+                print(f"Error reading template {template_path}: {e}", file=sys.stderr)
+                
+        # Case-insensitive check
+        for f_name in os.listdir(templates_dir):
+            if f_name.lower() == filename.lower():
+                path = os.path.join(templates_dir, f_name)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    return {"type": "template", "filepath": path, "content": content}
+                except Exception as e:
+                    print(f"Error reading template {path}: {e}", file=sys.stderr)
+
+    # 2. Check in general vault (context note)
+    context_path = find_file_in_vault(vault_path, link_name)
+    if context_path:
+        try:
+            with open(context_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            return {"type": "context", "filepath": context_path, "content": content}
+        except Exception as e:
+            print(f"Error reading context note {context_path}: {e}", file=sys.stderr)
+            
+    return {"type": None, "filepath": None, "content": None}
+
+def resolve_and_interpolate_prompt(prompt: str, vault_path: str, agent_dir_rel: str) -> str:
+    """Parses wiki-links, resolves templates/context notes, and interpolates variables."""
+    links = extract_wiki_links(prompt)
+    
+    templates = []
+    contexts = []
+    
+    for link in links:
+        res = resolve_link(vault_path, agent_dir_rel, link)
+        if res["type"] == "template":
+            templates.append((link, res["content"]))
+        elif res["type"] == "context":
+            contexts.append((link, res["content"]))
+            
+    if templates:
+        base_prompt = templates[0][1]
+    else:
+        base_prompt = prompt
+        
+    current_time_struct = time.localtime()
+    date_str = time.strftime("%Y-%m-%d", current_time_struct)
+    time_str = time.strftime("%H:%M:%S", current_time_struct)
+    
+    variables = {
+        "date": date_str,
+        "time": time_str,
+    }
+    
+    first_context_title = ""
+    first_context_content = ""
+    if contexts:
+        first_context_title = contexts[0][0]
+        first_context_content = contexts[0][1]
+        
+    variables["title"] = first_context_title
+    variables["content"] = first_context_content
+    
+    resolved_prompt = base_prompt
+    for var_name, var_value in variables.items():
+        pattern = re.compile(r"\{\{\s*" + re.escape(var_name) + r"\s*\}\}", re.IGNORECASE)
+        resolved_prompt = pattern.sub(var_value, resolved_prompt)
+        
+    has_content_placeholder = bool(re.search(r"\{\{\s*content\s*\}\}", base_prompt, re.IGNORECASE))
+    
+    if contexts and not has_content_placeholder:
+        context_sections = []
+        for title, content in contexts:
+            context_sections.append(f"\n\n--- Context: {title} ---\n{content}")
+        resolved_prompt += "".join(context_sections)
+        
+    if not templates:
+        for link in links:
+            resolved_prompt = re.sub(
+                r"\[\[" + re.escape(link) + r"(?:\|.*?)?\]\]",
+                link,
+                resolved_prompt
+            )
+            
+    return resolved_prompt.strip()
+
 def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config: Dict[str, Any]) -> bool:
     """Runs the subagent router, sandboxed provider and logs the results."""
     # 2. Execute under sandbox
@@ -202,7 +338,8 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                     return
                 
                 # Execute pipeline
-                execute_task_pipeline(filepath, clean_line, prompt, config)
+                resolved_prompt = resolve_and_interpolate_prompt(prompt, config["vault"]["path"], config["vault"]["agent_dir"])
+                execute_task_pipeline(filepath, clean_line, resolved_prompt, config)
                 return
                 
             elif is_rejected:
@@ -246,6 +383,9 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         
         print(f"Task detected: '{prompt}'")
         
+        # Resolve prompt here
+        resolved_prompt = resolve_and_interpolate_prompt(prompt, config["vault"]["path"], config["vault"]["agent_dir"])
+        
         # Check if task requires manual approval
         frontmatter = {}
         if current_content.startswith("---"):
@@ -259,7 +399,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                         
         has_write_files = "write_files" in frontmatter
         dangerous_keywords = ["rm ", "delete", "git push", "git commit", "deploy", "run command"]
-        has_dangerous_keywords = any(kw in prompt.lower() for kw in dangerous_keywords)
+        has_dangerous_keywords = any(kw in resolved_prompt.lower() for kw in dangerous_keywords)
         
         if has_write_files or has_dangerous_keywords:
             print(f"Task '{prompt}' requires manual approval. Inserting approval checklist...")
@@ -301,7 +441,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 print(f"Failed to write running status to file: {e}", file=sys.stderr)
                 return
                 
-            execute_task_pipeline(filepath, running_line, prompt, config)
+            execute_task_pipeline(filepath, running_line, resolved_prompt, config)
 
 def scan_vault(vault_path: str, agent_dir_rel: str, config: Dict[str, Any]) -> None:
     """Scans Obsidian vault for modified markdown files containing tasks."""

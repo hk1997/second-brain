@@ -254,5 +254,68 @@ class TestAgentSync(unittest.TestCase):
         # Assert pipeline was NEVER executed
         mock_pipeline.assert_not_called()
 
+    def test_extract_wiki_links(self):
+        prompt = "Use [[Summarize Note]] on [[2026-06-08#Journal]] with [[Target|Display Name]]"
+        links = agent_sync.extract_wiki_links(prompt)
+        self.assertEqual(links, ["Summarize Note", "2026-06-08", "Target"])
+
+    def test_resolve_link_template(self):
+        templates_dir = os.path.join(self.vault_path, "_System", "Agent", "Templates")
+        os.makedirs(templates_dir, exist_ok=True)
+        template_path = os.path.join(templates_dir, "Summarize Note.md")
+        with open(template_path, "w", encoding="utf-8") as f:
+            f.write("Template content for: {{title}}")
+
+        res = agent_sync.resolve_link(self.vault_path, "_System/Agent", "Summarize Note")
+        self.assertEqual(res["type"], "template")
+        self.assertEqual(res["content"], "Template content for: {{title}}")
+
+    def test_resolve_link_context(self):
+        note_path = os.path.join(self.vault_path, "Subfolder", "Meeting Note.md")
+        os.makedirs(os.path.dirname(note_path), exist_ok=True)
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write("Meeting notes details")
+
+        res = agent_sync.resolve_link(self.vault_path, "_System/Agent", "Meeting Note")
+        self.assertEqual(res["type"], "context")
+        self.assertEqual(res["content"], "Meeting notes details")
+
+    def test_resolve_and_interpolate_prompt(self):
+        # Setup template and context
+        templates_dir = os.path.join(self.vault_path, "_System", "Agent", "Templates")
+        os.makedirs(templates_dir, exist_ok=True)
+        template_path = os.path.join(templates_dir, "Summarize.md")
+        with open(template_path, "w", encoding="utf-8") as f:
+            f.write("Please summarize: {{title}}\nContent:\n{{content}}\nDate: {{date}}")
+
+        context_path = os.path.join(self.vault_path, "Work", "Project Details.md")
+        os.makedirs(os.path.dirname(context_path), exist_ok=True)
+        with open(context_path, "w", encoding="utf-8") as f:
+            f.write("Project description text.")
+
+        prompt = "[[Summarize]] using [[Project Details]]"
+        resolved = agent_sync.resolve_and_interpolate_prompt(prompt, self.vault_path, "_System/Agent")
+
+        # Verify title, content, date interpolation
+        self.assertIn("Please summarize: Project Details", resolved)
+        self.assertIn("Content:\nProject description text.", resolved)
+        current_date = time.strftime("%Y-%m-%d")
+        self.assertIn(f"Date: {current_date}", resolved)
+
+    def test_resolve_and_interpolate_prompt_no_template(self):
+        # Setup context note only
+        context_path = os.path.join(self.vault_path, "Daily", "Today.md")
+        os.makedirs(os.path.dirname(context_path), exist_ok=True)
+        with open(context_path, "w", encoding="utf-8") as f:
+            f.write("Today I coded python.")
+
+        prompt = "Review [[Today]] and note accomplishments on {{date}}"
+        resolved = agent_sync.resolve_and_interpolate_prompt(prompt, self.vault_path, "_System/Agent")
+
+        current_date = time.strftime("%Y-%m-%d")
+        self.assertTrue(resolved.startswith(f"Review Today and note accomplishments on {current_date}"))
+        self.assertIn("--- Context: Today ---", resolved)
+        self.assertIn("Today I coded python.", resolved)
+
 if __name__ == "__main__":
     unittest.main()
