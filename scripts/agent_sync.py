@@ -311,13 +311,23 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
         if not running_line:
             running_line = running_block.splitlines()[0]
             
+        # Format output as indented to nest properly under the task bullet in Obsidian
+        output_indented = "\n".join("  " + l for l in output_text.splitlines())
+        
         if execution_success:
             final_tag = "- [x] #agent"
-            completed_block = running_line.replace("- [/] #agent", final_tag, 1)
+            completed_block = (
+                running_line.replace("- [/] #agent", final_tag, 1) + 
+                f"\n  <details>\n  <summary>🤖 View Output</summary>\n\n{output_indented}\n  </details>"
+            )
         else:
             final_tag = "- [-] #agent"
             error_line = error_details.splitlines()[0] if error_details else "Unknown error"
-            completed_block = running_line.replace("- [/] #agent", final_tag, 1) + f"\n  * ❌ Error: {error_line}"
+            completed_block = (
+                running_line.replace("- [/] #agent", final_tag, 1) + 
+                f"\n  * ❌ Error: {error_line}" +
+                f"\n  <details>\n  <summary>❌ View Error Log</summary>\n\n{output_indented}\n  </details>"
+            )
             
         new_content = current_content.replace(running_block, completed_block, 1)
         
