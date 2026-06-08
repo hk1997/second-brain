@@ -315,16 +315,16 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
         output_indented = "\n".join("  " + l for l in output_text.splitlines())
         
         if execution_success:
-            final_tag = "- [x] #agent"
+            final_tag = "- [x]"
             completed_block = (
-                running_line.replace("- [/] #agent", final_tag, 1) + 
+                running_line.replace("- [/]", final_tag, 1) + 
                 f"\n  <details>\n  <summary>🤖 View Output</summary>\n\n{output_indented}\n  </details>"
             )
         else:
-            final_tag = "- [-] #agent"
+            final_tag = "- [-]"
             error_line = error_details.splitlines()[0] if error_details else "Unknown error"
             completed_block = (
-                running_line.replace("- [/] #agent", final_tag, 1) + 
+                running_line.replace("- [/]", final_tag, 1) + 
                 f"\n  * ❌ Error: {error_line}" +
                 f"\n  <details>\n  <summary>❌ View Error Log</summary>\n\n{output_indented}\n  </details>"
             )
@@ -349,7 +349,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         return
 
     # Check for pending approvals first!
-    pending_pattern = re.compile(r"^([ \t]*-[ \t]*\[[ \t]*[ ][ \t]*\][ \t]*#agent-pending-approval[ \t]+)(.*)$", re.MULTILINE)
+    pending_pattern = re.compile(r"^([ \t]*-[ \t]*\[[ \t]*[ ][ \t]*\][ \t]*)(.*#agent-pending-approval.*)$", re.MULTILINE)
     pending_matches = list(pending_pattern.finditer(content))
     
     current_content = content
@@ -357,7 +357,15 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
     if pending_matches:
         for match in pending_matches:
             original_line = match.group(0)
-            prompt = match.group(2).strip()
+            rest_of_line = match.group(2).strip()
+            
+            # Extract prompt by removing the #agent-pending-approval tag
+            if rest_of_line.startswith("#agent-pending-approval"):
+                prompt = rest_of_line[len("#agent-pending-approval"):].strip()
+            elif rest_of_line.endswith("#agent-pending-approval"):
+                prompt = rest_of_line[:-len("#agent-pending-approval")].strip()
+            else:
+                prompt = rest_of_line.replace("#agent-pending-approval", "").strip()
             
             # Check note for checkboxes
             is_approved = "- [x] Approve Task" in content
@@ -418,7 +426,7 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 return
 
     # Check for new tasks
-    task_pattern = re.compile(r"^([ \t]*-[ \t]*\[[ \t]*[ ][ \t]*\][ \t]*#agent[ \t]+)(.*)$", re.MULTILINE)
+    task_pattern = re.compile(r"^([ \t]*-[ \t]*\[[ \t]*[ ][ \t]*\][ \t]*)(.*#agent(?!-pending-approval).*)$", re.MULTILINE)
     matches = list(task_pattern.finditer(current_content))
     if not matches:
         return
@@ -427,7 +435,15 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
     
     for match in matches:
         original_line = match.group(0)
-        prompt = match.group(2).strip()
+        rest_of_line = match.group(2).strip()
+        
+        # Extract prompt by removing the #agent tag
+        if rest_of_line.startswith("#agent"):
+            prompt = rest_of_line[len("#agent"):].strip()
+        elif rest_of_line.endswith("#agent"):
+            prompt = rest_of_line[:-len("#agent")].strip()
+        else:
+            prompt = rest_of_line.replace("#agent", "").strip()
         
         print(f"Task detected: '{prompt}'")
         
