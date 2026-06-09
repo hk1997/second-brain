@@ -223,7 +223,15 @@ class TestAgentSync(unittest.TestCase):
         self.assertNotIn("- [x] Approve Task", final_content)
         
         # Assert pipeline was executed with running state tag and progress logs
-        mock_pipeline.assert_called_once_with(note_path, "- [/] #agent Create a calendar event\n  * 🟢 Routing task...", "Create a calendar event", self.config)
+        mock_pipeline.assert_called_once_with(
+            note_path, 
+            "- [/] #agent Create a calendar event\n  * 🟢 Routing task...", 
+            "Create a calendar event", 
+            self.config,
+            schedule_type=None,
+            redirect_mode=None,
+            redirect_target=None
+        )
 
     @patch("scripts.agent_sync.send_notification_alert")
     @patch("scripts.agent_sync.execute_task_pipeline")
@@ -400,6 +408,140 @@ class TestAgentSync(unittest.TestCase):
         # Check prompt resolution (which strips #agent) and tag preservation (replaces - [ ] with - [x] and keeps #agent at end)
         self.assertIn("- [x] Simple task at end #agent", final_content)
         mock_execute.assert_called_once_with("Simple task at end", self.vault_path, "gemini-1.5-flash")
+
+    def test_parse_redirection(self):
+        # Test overwrite wiki-link
+        p, mode, target = agent_sync.parse_redirection("Do something > [[Output Note]]")
+        self.assertEqual(p, "Do something")
+        self.assertEqual(mode, ">")
+        self.assertEqual(target, "Output Note")
+
+        # Test append file path
+        p, mode, target = agent_sync.parse_redirection("Do something >> logs/output.md")
+        self.assertEqual(p, "Do something")
+        self.assertEqual(mode, ">>")
+        self.assertEqual(target, "logs/output.md")
+
+        # Test no redirection
+        p, mode, target = agent_sync.parse_redirection("Do something without redirection")
+        self.assertEqual(p, "Do something without redirection")
+        self.assertIsNone(mode)
+        self.assertIsNone(target)
+
+    def test_parse_scheduling(self):
+        # Test daily tag
+        p, stype = agent_sync.parse_scheduling("Do something @daily")
+        self.assertEqual(p, "Do something")
+        self.assertEqual(stype, "daily")
+
+        # Test hourly tag in middle
+        p, stype = agent_sync.parse_scheduling("Do @hourly task now")
+        self.assertEqual(p, "Do task now")
+        self.assertEqual(stype, "hourly")
+
+        # Test no scheduling
+        p, stype = agent_sync.parse_scheduling("Do task normally")
+        self.assertEqual(p, "Do task normally")
+        self.assertIsNone(stype)
+
+    def test_should_run_scheduled_task(self):
+        # Case 1: No last run
+        self.assertTrue(agent_sync.should_run_scheduled_task("daily", None))
+
+        # Case 2: Elapsed time is small (skipped)
+        last_run = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 3600))
+        self.assertFalse(agent_sync.should_run_scheduled_task("daily", last_run))
+
+        # Case 3: Elapsed time is large (should run)
+        last_run_old = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 90000))
+        self.assertTrue(agent_sync.should_run_scheduled_task("daily", last_run_old))
+
+    @patch("scripts.agent_sync.send_notification_alert")
+    @patch("scripts.agent_sync.route_task")
+    @patch("scripts.providers.agy.AgyProvider.execute")
+    def test_execute_task_pipeline_redirection(self, mock_execute, mock_route, mock_alert):
+        mock_route.return_value = {"complexity": "simple", "model_recommendation": "gemini-1.5-flash", "required_mcp_servers": []}
+        mock_execute.return_value = "Custom redirected output text"
+
+        # Overwrite test
+        note_path = os.path.join(self.vault_path, "task.md")
+        running_block = "- [/] #agent Do task > [[TargetDoc]]\n  * 🟢 Routing task..."
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write(running_block)
+        
+        success = agent_sync.execute_task_pipeline(
+            note_path,
+            running_block,
+            "Do task",
+            self.config,
+            redirect_mode=">",
+            redirect_target="TargetDoc"
+        )
+        self.assertTrue(success)
+
+        # Check redirected file content
+        redirect_path = os.path.join(self.vault_path, "TargetDoc.md")
+        self.assertTrue(os.path.exists(redirect_path))
+        with open(redirect_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), "Custom redirected output text")
+
+        # Check original file status mutation
+        with open(note_path, "r", encoding="utf-8") as f:
+            note_content = f.read()
+        self.assertIn("- [x] #agent Do task > [[TargetDoc]]", note_content)
+        self.assertIn("* 🟢 Output written to [[TargetDoc]]", note_content)
+        self.assertNotIn("<details>", note_content)
+
+    @patch("scripts.agent_sync.send_notification_alert")
+    @patch("scripts.agent_sync.route_task")
+    @patch("scripts.providers.agy.AgyProvider.execute")
+    def test_process_file_trusted_bypass(self, mock_execute, mock_route, mock_alert):
+        mock_route.return_value = {"complexity": "simple", "model_recommendation": "gemini-1.5-flash", "required_mcp_servers": []}
+        mock_execute.return_value = "Git commit successful"
+
+        # Note with a dangerous keyword but marked #trusted
+        note_path = os.path.join(self.vault_path, "trusted-task.md")
+        note_content = "- [ ] #agent git commit our changes #trusted"
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write(note_content)
+
+        # Run process - should execute immediately without entering approval state
+        agent_sync.process_file(note_path, self.config)
+
+        with open(note_path, "r", encoding="utf-8") as f:
+            final_content = f.read()
+
+        self.assertIn("- [x] #agent git commit our changes #trusted", final_content)
+        self.assertNotIn("### [Approval Required]", final_content)
+
+    @patch("scripts.agent_sync.send_notification_alert")
+    @patch("scripts.agent_sync.route_task")
+    @patch("scripts.providers.agy.AgyProvider.execute")
+    def test_process_file_recurring_scheduling(self, mock_execute, mock_route, mock_alert):
+        mock_route.return_value = {"complexity": "simple", "model_recommendation": "gemini-1.5-flash", "required_mcp_servers": []}
+        mock_execute.return_value = "Hourly task executed output"
+
+        note_path = os.path.join(self.vault_path, "scheduled-task.md")
+        
+        # Scenario A: No last run bullet - executes
+        note_content = "- [ ] #agent @hourly Do task"
+        with open(note_path, "w", encoding="utf-8") as f:
+            f.write(note_content)
+
+        agent_sync.process_file(note_path, self.config)
+
+        with open(note_path, "r", encoding="utf-8") as f:
+            content_a = f.read()
+
+        # Should remain unchecked (- [ ]) but have Last run line
+        self.assertIn("- [ ] #agent @hourly Do task", content_a)
+        self.assertIn("* Last run: ", content_a)
+        self.assertIn("Hourly task executed output", content_a)
+
+        # Scenario B: Last run was recent (skipped)
+        mock_execute.reset_mock()
+        agent_sync.process_file(note_path, self.config)
+        mock_execute.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
