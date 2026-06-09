@@ -17,6 +17,128 @@ sys.path.insert(0, os.path.abspath(os.path.join(SCRIPT_DIR, "..")))
 from scripts.providers.agy import AgyProvider
 from scripts.router import route_task
 
+# Match > [[Target]] or >> [[Target]] or > target.md or >> target.md at the end of a string
+REDIRECT_PATTERN = re.compile(r"\s*(>>?)\s*(?:\[\[(.*?)\]\]|([^\s\>]+))\s*$")
+
+# Match @hourly, @daily, @weekly, @monthly
+SCHEDULE_PATTERN = re.compile(r"\s*@(hourly|daily|weekly|monthly)\b", re.IGNORECASE)
+
+def parse_redirection(prompt: str) -> tuple:
+    """Parses redirection syntax from the end of the prompt.
+    
+    Returns (cleaned_prompt, redirect_mode, redirect_target)
+    """
+    match = REDIRECT_PATTERN.search(prompt)
+    if match:
+        mode = match.group(1)
+        target = match.group(2) if match.group(2) is not None else match.group(3)
+        cleaned_prompt = prompt[:match.start()].strip()
+        return cleaned_prompt, mode, target
+    return prompt, None, None
+
+def parse_scheduling(prompt: str) -> tuple:
+    """Parses scheduling syntax from the prompt.
+    
+    Returns (cleaned_prompt, schedule_type)
+    """
+    match = SCHEDULE_PATTERN.search(prompt)
+    if match:
+        schedule_type = match.group(1).lower()
+        cleaned_prompt = SCHEDULE_PATTERN.sub("", prompt).strip()
+        cleaned_prompt = re.sub(r"\s+", " ", cleaned_prompt)
+        return cleaned_prompt, schedule_type
+    return prompt, None
+
+def should_run_scheduled_task(schedule_type: str, last_run_str: str | None) -> bool:
+    """Checks if a scheduled task should run based on the last run timestamp."""
+    if not last_run_str:
+        return True
+        
+    try:
+        last_run_time = time.strptime(last_run_str, "%Y-%m-%d %H:%M:%S")
+        last_run_epoch = time.mktime(last_run_time)
+    except Exception:
+        return True
+        
+    current_time = time.time()
+    elapsed = current_time - last_run_epoch
+    
+    if schedule_type == "hourly":
+        return elapsed >= 3600.0
+    elif schedule_type == "daily":
+        return elapsed >= 86340.0 # 24 hours minus 1 min buffer
+    elif schedule_type == "weekly":
+        return elapsed >= 7 * 86400.0 - 60.0
+    elif schedule_type == "monthly":
+        return elapsed >= 30 * 86400.0 - 60.0
+        
+    return False
+
+def resolve_output_filepath(vault_path: str, target: str) -> str:
+    """Resolves redirect targets (wiki-links or file paths) to an absolute path within the vault."""
+    if not target.lower().endswith(".md"):
+        filename = target + ".md"
+    else:
+        filename = target
+    
+    filename = filename.strip("/\\")
+    
+    existing_path = find_file_in_vault(vault_path, target)
+    if existing_path:
+        return existing_path
+        
+    full_path = os.path.abspath(os.path.join(vault_path, filename))
+    if not full_path.startswith(os.path.abspath(vault_path)):
+        raise ValueError("Redirect target path must resolve inside the vault")
+    return full_path
+
+def get_task_block_and_last_run(content: str, line_start_pos: int, line_end_pos: int) -> tuple:
+    """Given a task line's start and end positions, extracts the entire task block
+    (including all indented sub-lines) and the last run time if present.
+    
+    Returns (full_block, last_run_time_str, block_end_pos).
+    """
+    lines = content[line_end_pos:].splitlines(keepends=True)
+    block_lines = [content[line_start_pos:line_end_pos]]
+    last_run_time = None
+    consumed_chars = 0
+    
+    last_run_pattern = re.compile(r"^\s*[\*\-]\s*Last run:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", re.IGNORECASE)
+    
+    for line in lines:
+        if line.strip() == "" or line.startswith(" ") or line.startswith("\t"):
+            block_lines.append(line)
+            consumed_chars += len(line)
+            match = last_run_pattern.match(line)
+            if match:
+                last_run_time = match.group(1)
+        else:
+            break
+            
+    full_block = "".join(block_lines)
+    return full_block, last_run_time, line_end_pos + consumed_chars
+
+def parse_task_line_and_extract_metadata(rest_of_line: str) -> tuple:
+    """Cleans tags from the task line and extracts metadata.
+    
+    Returns (cleaned_prompt, schedule_type, redirect_mode, redirect_target, is_trusted)
+    """
+    is_trusted = "#trusted" in rest_of_line.lower() or "#force" in rest_of_line.lower()
+    
+    # Remove all core tags
+    clean_line = rest_of_line
+    for tag in ["#agent-pending-approval", "#agent", "#trusted", "#force"]:
+        clean_line = clean_line.replace(tag, "")
+    clean_line = clean_line.strip()
+    
+    # Parse scheduling
+    cleaned_prompt, schedule_type = parse_scheduling(clean_line)
+    
+    # Parse redirection
+    cleaned_prompt, redirect_mode, redirect_target = parse_redirection(cleaned_prompt)
+    
+    return cleaned_prompt, schedule_type, redirect_mode, redirect_target, is_trusted
+
 def load_config(config_path: str = DEFAULT_CONFIG_PATH) -> Dict[str, Any]:
     """Loads configuration from config.json."""
     if not os.path.exists(config_path):
@@ -245,7 +367,15 @@ def resolve_and_interpolate_prompt(prompt: str, vault_path: str, agent_dir_rel: 
             
     return resolved_prompt.strip()
 
-def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config: Dict[str, Any]) -> bool:
+def execute_task_pipeline(
+    filepath: str, 
+    running_block: str, 
+    prompt: str, 
+    config: Dict[str, Any],
+    schedule_type: str = None,
+    redirect_mode: str = None,
+    redirect_target: str = None
+) -> bool:
     """Runs the subagent router, sandboxed provider and logs the results."""
     # 2. Execute under sandbox
     print(f"Executing: '{prompt}'...")
@@ -295,6 +425,25 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
         print(f"Task failed: '{prompt}' - Error: {e}", file=sys.stderr)
         send_notification_alert(config, f"OAB Task Failed: '{prompt}' - Error: {e}")
     
+    # Process output redirection if requested and successful
+    if execution_success and redirect_mode and redirect_target:
+        try:
+            target_path = resolve_output_filepath(config["vault"]["path"], redirect_target)
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            if redirect_mode == ">":
+                with open(target_path, "w", encoding="utf-8") as f:
+                    f.write(output_text)
+            else: # ">>"
+                file_exists = os.path.exists(target_path)
+                with open(target_path, "a", encoding="utf-8") as f:
+                    if file_exists and os.path.getsize(target_path) > 0:
+                        f.write("\n")
+                    f.write(output_text)
+        except Exception as e:
+            print(f"Error redirecting output to {redirect_target}: {e}", file=sys.stderr)
+            error_details = f"Redirection failed: {e}"
+            execution_success = False
+
     # Replicate log back to logs.md
     replicate_log(config["vault"]["path"], config["vault"]["agent_dir"], prompt, model, execution_success, output_text, error_details)
 
@@ -311,23 +460,34 @@ def execute_task_pipeline(filepath: str, running_block: str, prompt: str, config
         if not running_line:
             running_line = running_block.splitlines()[0]
             
-        # Format output as indented to nest properly under the task bullet in Obsidian
-        output_indented = "\n".join("  " + l for l in output_text.splitlines())
+        timestamp_now = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
         
         if execution_success:
-            final_tag = "- [x]"
-            completed_block = (
-                running_line.replace("- [/]", final_tag, 1) + 
-                f"\n  <details>\n  <summary>🤖 View Output</summary>\n\n{output_indented}\n  </details>"
-            )
+            final_tag = "- [ ]" if schedule_type else "- [x]"
+            completed_block = running_line.replace("- [/]", final_tag, 1)
+            
+            if schedule_type:
+                completed_block += f"\n  * Last run: {timestamp_now}"
+                
+            if redirect_target:
+                is_wiki_link = f"[[{redirect_target}]]" in running_line or f"[[{redirect_target}" in running_line
+                link_str = f"[[{redirect_target}]]" if is_wiki_link else redirect_target
+                completed_block += f"\n  * 🟢 Output written to {link_str}"
+            else:
+                output_indented = "\n".join("  " + l for l in output_text.splitlines())
+                completed_block += f"\n  <details>\n  <summary>🤖 View Output</summary>\n\n{output_indented}\n  </details>"
         else:
-            final_tag = "- [-]"
+            final_tag = "- [ ]" if schedule_type else "- [-]"
+            completed_block = running_line.replace("- [/]", final_tag, 1)
+            
+            if schedule_type:
+                completed_block += f"\n  * Last run: {timestamp_now}"
+                
             error_line = error_details.splitlines()[0] if error_details else "Unknown error"
-            completed_block = (
-                running_line.replace("- [/]", final_tag, 1) + 
-                f"\n  * ❌ Error: {error_line}" +
-                f"\n  <details>\n  <summary>❌ View Error Log</summary>\n\n{output_indented}\n  </details>"
-            )
+            completed_block += f"\n  * ❌ Error: {error_line}"
+            
+            output_indented = "\n".join("  " + l for l in output_text.splitlines())
+            completed_block += f"\n  <details>\n  <summary>❌ View Error Log</summary>\n\n{output_indented}\n  </details>"
             
         new_content = current_content.replace(running_block, completed_block, 1)
         
@@ -359,20 +519,15 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
             original_line = match.group(0)
             rest_of_line = match.group(2).strip()
             
-            # Extract prompt by removing the #agent-pending-approval tag
-            if rest_of_line.startswith("#agent-pending-approval"):
-                prompt = rest_of_line[len("#agent-pending-approval"):].strip()
-            elif rest_of_line.endswith("#agent-pending-approval"):
-                prompt = rest_of_line[:-len("#agent-pending-approval")].strip()
-            else:
-                prompt = rest_of_line.replace("#agent-pending-approval", "").strip()
+            # Extract prompt and metadata using helper
+            cleaned_prompt, schedule_type, redirect_mode, redirect_target, is_trusted = parse_task_line_and_extract_metadata(rest_of_line)
             
             # Check note for checkboxes
             is_approved = "- [x] Approve Task" in content
             is_rejected = "- [x] Reject Task" in content
             
             if is_approved:
-                print(f"Task approved by user: '{prompt}'")
+                print(f"Task approved by user: '{cleaned_prompt}'")
                 # Clean up approval block and update state to Running
                 clean_line = original_line.replace("#agent-pending-approval", "#agent").replace("- [ ]", "- [/]")
                 running_block = clean_line + "\n  * 🟢 Routing task..."
@@ -388,18 +543,26 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 try:
                     with open(filepath, "w", encoding="utf-8") as f:
                         f.write(current_content)
-                    send_notification_alert(config, f"OAB Task Approved: '{prompt}'")
+                    send_notification_alert(config, f"OAB Task Approved: '{cleaned_prompt}'")
                 except Exception as e:
                     print(f"Failed to write approved status: {e}", file=sys.stderr)
                     return
                 
                 # Execute pipeline
-                resolved_prompt = resolve_and_interpolate_prompt(prompt, config["vault"]["path"], config["vault"]["agent_dir"])
-                execute_task_pipeline(filepath, running_block, resolved_prompt, config)
+                resolved_prompt = resolve_and_interpolate_prompt(cleaned_prompt, config["vault"]["path"], config["vault"]["agent_dir"])
+                execute_task_pipeline(
+                    filepath, 
+                    running_block, 
+                    resolved_prompt, 
+                    config,
+                    schedule_type=schedule_type,
+                    redirect_mode=redirect_mode,
+                    redirect_target=redirect_target
+                )
                 return
                 
             elif is_rejected:
-                print(f"Task rejected by user: '{prompt}'")
+                print(f"Task rejected by user: '{cleaned_prompt}'")
                 # Update state to Failed (Cancelled)
                 failed_line = original_line.replace("#agent-pending-approval", "#agent").replace("- [ ]", "- [-]")
                 current_content = current_content.replace(original_line, failed_line)
@@ -416,13 +579,13 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 try:
                     with open(filepath, "w", encoding="utf-8") as f:
                         f.write(current_content)
-                    send_notification_alert(config, f"OAB Task Rejected: '{prompt}'")
+                    send_notification_alert(config, f"OAB Task Rejected: '{cleaned_prompt}'")
                 except Exception as e:
                     print(f"Failed to write rejected status: {e}", file=sys.stderr)
                 return
             else:
                 # Still waiting for approval
-                print(f"Task is pending user approval: '{prompt}'")
+                print(f"Task is pending user approval: '{cleaned_prompt}'")
                 return
 
     # Check for new tasks
@@ -437,18 +600,21 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         original_line = match.group(0)
         rest_of_line = match.group(2).strip()
         
-        # Extract prompt by removing the #agent tag
-        if rest_of_line.startswith("#agent"):
-            prompt = rest_of_line[len("#agent"):].strip()
-        elif rest_of_line.endswith("#agent"):
-            prompt = rest_of_line[:-len("#agent")].strip()
-        else:
-            prompt = rest_of_line.replace("#agent", "").strip()
+        # Get task block and last run metadata
+        full_block, last_run_str, block_end_pos = get_task_block_and_last_run(current_content, match.start(), match.end())
         
-        print(f"Task detected: '{prompt}'")
+        # Extract prompt and metadata using helper
+        cleaned_prompt, schedule_type, redirect_mode, redirect_target, is_trusted = parse_task_line_and_extract_metadata(rest_of_line)
+        
+        # Check if scheduled task should be skipped
+        if schedule_type and not should_run_scheduled_task(schedule_type, last_run_str):
+            print(f"Scheduled task '{cleaned_prompt}' (@{schedule_type}) skipped - last run was {last_run_str}")
+            continue
+            
+        print(f"Task detected: '{cleaned_prompt}'")
         
         # Resolve prompt here
-        resolved_prompt = resolve_and_interpolate_prompt(prompt, config["vault"]["path"], config["vault"]["agent_dir"])
+        resolved_prompt = resolve_and_interpolate_prompt(cleaned_prompt, config["vault"]["path"], config["vault"]["agent_dir"])
         
         # Check if task requires manual approval
         frontmatter = {}
@@ -465,10 +631,9 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
         dangerous_keywords = ["rm ", "delete", "git push", "git commit", "deploy", "run command"]
         has_dangerous_keywords = any(kw in resolved_prompt.lower() for kw in dangerous_keywords)
         
-        if has_write_files or has_dangerous_keywords:
-            print(f"Task '{prompt}' requires manual approval. Inserting approval checklist...")
+        if (has_write_files or has_dangerous_keywords) and not is_trusted:
+            print(f"Task '{cleaned_prompt}' requires manual approval. Inserting approval checklist...")
             pending_line = original_line.replace("#agent", "#agent-pending-approval")
-            current_content = current_content.replace(original_line, pending_line)
             
             # Construct interactive checklist block
             approval_ui = (
@@ -477,18 +642,17 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
                 "- [ ] Approve Task\n"
                 "- [ ] Reject Task\n"
             )
-            # Find the position right after the pending line
-            line_index = current_content.find(pending_line)
-            if line_index != -1:
-                insert_pos = line_index + len(pending_line)
-                current_content = current_content[:insert_pos] + approval_ui + current_content[insert_pos:]
-            else:
-                current_content += approval_ui
+            
+            new_block = pending_line + approval_ui
+            if last_run_str:
+                new_block += f"\n  * Last run: {last_run_str}"
+                
+            current_content = current_content.replace(full_block, new_block, 1)
                 
             try:
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write(current_content)
-                send_notification_alert(config, f"OAB Task Approval Required: '{prompt}'")
+                send_notification_alert(config, f"OAB Task Approval Required: '{cleaned_prompt}'")
             except Exception as e:
                 print(f"Failed to write pending approval state: {e}", file=sys.stderr)
             return
@@ -496,17 +660,27 @@ def process_file(filepath: str, config: Dict[str, Any]) -> None:
             # Run task immediately
             running_line = original_line.replace("- [ ]", "- [/]")
             running_block = running_line + "\n  * 🟢 Routing task..."
-            current_content = current_content.replace(original_line, running_block, 1)
+            
+            current_content = current_content.replace(full_block, running_block, 1)
             
             try:
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write(current_content)
-                send_notification_alert(config, f"OAB Task Running: '{prompt}'")
+                send_notification_alert(config, f"OAB Task Running: '{cleaned_prompt}'")
             except Exception as e:
                 print(f"Failed to write running status to file: {e}", file=sys.stderr)
                 return
                 
-            execute_task_pipeline(filepath, running_block, resolved_prompt, config)
+            execute_task_pipeline(
+                filepath, 
+                running_block, 
+                resolved_prompt, 
+                config,
+                schedule_type=schedule_type,
+                redirect_mode=redirect_mode,
+                redirect_target=redirect_target
+            )
+            return
 
 def scan_vault(vault_path: str, agent_dir_rel: str, config: Dict[str, Any]) -> None:
     """Scans Obsidian vault for modified markdown files containing tasks."""
